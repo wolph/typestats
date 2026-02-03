@@ -15,7 +15,6 @@ if TYPE_CHECKING:
 
 __all__ = "Annotation", "ModuleSymbols", "Symbol", "collect_global_symbols"
 
-DUNDER_MIN_LEN = 4
 _EMPTY_MODULE: Final[cst.Module] = cst.Module([])
 
 type Annotation = Unknown | ExprAnnotation | FunctionAnnotation | ClassAnnotation
@@ -98,37 +97,6 @@ class Symbol:
 class ModuleSymbols:
     symbols: list[Symbol]
     all_: set[str] | None
-
-
-def collect_global_symbols(source: str, /) -> ModuleSymbols:
-    module = cst.parse_module(source)
-    wrapper = MetadataWrapper(module)
-    visitor = _SymbolVisitor(wrapper.module)
-    exports_visitor = GatherExportsVisitor(CodemodContext())
-    wrapper.visit(visitor)
-    wrapper.visit(exports_visitor)
-    exports = set(exports_visitor.explicit_exported_objects)
-    return ModuleSymbols(symbols=visitor.symbols, all_=exports or None)
-
-
-def _is_public(name: str) -> bool:
-    return not name.startswith("__") or (
-        name.endswith("__") and len(name) > DUNDER_MIN_LEN
-    )
-
-
-def _extract_names(expr: cst.BaseExpression) -> list[cst.Name]:
-    match expr:
-        case cst.Name():
-            return [expr]
-        case cst.Tuple(elements=elements) | cst.List(elements=elements):
-            names: list[cst.Name] = []
-            for element in elements:
-                if element.value is not None:
-                    names.extend(_extract_names(element.value))
-            return names
-        case _:
-            return []
 
 
 class _SymbolVisitor(cst.CSTVisitor):
@@ -288,6 +256,35 @@ class _SymbolVisitor(cst.CSTVisitor):
     def visit_AugAssign(self, node: cst.AugAssign) -> None:
         if self._function_depth != 0:
             return
+
+
+def collect_global_symbols(source: str, /) -> ModuleSymbols:
+    module = cst.parse_module(source)
+    wrapper = MetadataWrapper(module)
+    visitor = _SymbolVisitor(wrapper.module)
+    exports_visitor = GatherExportsVisitor(CodemodContext())
+    wrapper.visit(visitor)
+    wrapper.visit(exports_visitor)
+    exports = set(exports_visitor.explicit_exported_objects)
+    return ModuleSymbols(symbols=visitor.symbols, all_=exports or None)
+
+
+def _is_public(name: str) -> bool:
+    return not name.startswith("__") and not name.endswith("__") and name != "_"
+
+
+def _extract_names(expr: cst.BaseExpression) -> list[cst.Name]:
+    match expr:
+        case cst.Name():
+            return [expr]
+        case cst.Tuple(elements=elements) | cst.List(elements=elements):
+            names: list[cst.Name] = []
+            for element in elements:
+                if element.value is not None:
+                    names.extend(_extract_names(element.value))
+            return names
+        case _:
+            return []
 
 
 @mainpy.main
