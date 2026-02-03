@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - uses: actions/checkout@v6.0.1
+      - uses: actions/checkout@v6.0.2
       - uses: astral-sh/setup-uv@v7.2.1
       - name: ruff check
         run: uv run ruff check --output-format=github
@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - uses: actions/checkout@v6.0.1
+      - uses: actions/checkout@v6.0.2
       - name: dprint
         uses: dprint/check@v2.3
 
@@ -38,7 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - uses: actions/checkout@v6.0.1
+      - uses: actions/checkout@v6.0.2
       - uses: astral-sh/setup-uv@v7.2.1
       - name: pyrefly check
         run: uv run pyrefly check --output-format=github
