@@ -1,0 +1,32 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    allow:
+      - dependency-type: all
+    labels:
+      - "dependencies"
+      - "dependabot"
+    commit-message:
+      prefix: "🤖 "
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: uv
+    versioning-strategy: increase
+    directory: /
+    schedule:
+      interval: monthly
+    allow:
+      - dependency-type: all
+    labels:
+      - "dependencies"
+      - "dependabot"
+    commit-message:
+      prefix: "🤖 "
+    groups:
+      actions:
+        patterns: ["*"]
