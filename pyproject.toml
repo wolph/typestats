@@ -1,0 +1,88 @@
+[build-system]
+requires = ["uv_build>=0.9.28,<0.10"]
+build-backend = "uv_build"
+
+[project]
+name = "typestats"
+version = "0.0.0.dev0"
+description = "Type annotation coverage statistics for Python packages"
+readme = "README.md"
+authors = [
+  { name = "Joren Hammudoglu", email = "jhammudoglu@gmail.com" },
+]
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3.14",
+  "Typing :: Typed",
+]
+requires-python = ">=3.14"
+dependencies = [
+  "mainpy>=1.5,<2", # like `if __name__ == "__main__": ...` but Pythonic
+  "anyio>=4.12.1,<5", # like asyncio but with a decent API (asyncio is a mess)
+  "uvloop>=0.22.1,<1; sys_platform != 'win32'",
+  "httpx[http2]>=0.28.1,<1", # like requests but modern and with async support
+  "yarl>=1.22.0,<2", # like pathlib but for URLs
+  "packaging>=26.0",
+  "libcst>=1.8.6,<2", # like ast but preservers comments/formatting and other goodies
+]
+
+[project.scripts]
+typestats = "typestats:__main__.app"
+
+[dependency-groups]
+dev = [
+  "dprint-py>=0.51.1.0",
+  "pyrefly>=0.51.0",
+  "ruff>=0.14.14",
+]
+
+# pyrefly
+
+[tool.pyrefly]
+project-includes = ["src"]
+
+# (based)pyright
+
+[tool.pyright]
+ignore = [".venv"]
+stubPath = "."
+pythonPlatform = "All"
+typeCheckingMode = "strict"
+deprecateTypingAliases = true
+enableReachabilityAnalysis = false
+enableTypeIgnoreComments = false
+reportImplicitOverride = true
+reportImportCycles = true
+reportUnnecessaryComparison = false
+reportUnnecessaryTypeIgnoreComment = true
+
+# ruff
+
+[tool.ruff]
+src = ["src/typestats"]
+extend-exclude = [".git", ".mypy_cache", ".tox", ".venv"]
+force-exclude = true
+show-fixes = true
+preview = true
+
+[tool.ruff.format]
+line-ending = "lf"
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+  "ANN401", # flake8-annotations - any-type
+  "S101", # flake8-bandit - assert
+  "FBT", # flake8-boolean-trap
+  "CPY", # flake8-copyright
+  "FIX", # flake8-fixme
+  "TD003", # flake8-todos - missing-todo-link
+  "D", # pydocstyle
+  "DOC201", # pydoclint - docstring-missing-returns
+  "TRY003", # tryceratops - raise-vanilla-args
+  "RUF067", # ruff - non-empty-init-module
+]
