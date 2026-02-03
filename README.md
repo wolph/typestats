@@ -2,7 +2,12 @@
 
 A tool to analyze the type annotation coverage of Python projects on PyPI.
 
-## Pipeline
+> [!IMPORTANT]
+> This project is a work-in-progress and is not yet functional.
+
+## Implementation details
+
+### Pipeline
 
 For a given project:
 
@@ -32,7 +37,7 @@ For a given project:
       annotation kind (inline, bundled stubs, typeshed stubs, third-party stubs, etc)
 12. TODO: Export the statistics for use in a website/dashboard (e.g. json, csv, or sqlite)
 
-## Implementation details
+### Async IO
 
 All IO (HTTP requests, subprocesses, file IO, etc) is performed asynchronously using `anyio` and
 `httpx` (over HTTP/2). This way we effectively get pipeline parallelism for free (i.e. by doing
