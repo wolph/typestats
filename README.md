@@ -38,3 +38,37 @@ All IO (HTTP requests, subprocesses, file IO, etc) is performed asynchronously u
 `httpx` (over HTTP/2). This way we effectively get pipeline parallelism for free (i.e. by doing
 other things while waiting on IO, instead of blocking).
 Use free-threading for best performance (e.g. use `--python 3.14t` with `uv`).
+
+## Development
+
+To set up a development environment (using [uv](https://github.com/astral-sh/uv)), run:
+
+```bash
+uv sync
+```
+
+In CI we currently run [ruff](https://github.com/astral-sh/ruff),
+[dprint](https://github.com/dprint/dprint), and [pyrefly](https://github.com/facebook/pyrefly).
+It's easy to run them locally as well, just
+
+```bash
+uv run ruff check
+uv run ruff format
+
+uv run dprint check
+uv run dprint fmt
+
+uv run pyrefly check
+```
+
+(`uv run` can be omitted if you manually activated the virtual environment created by `uv`)
+
+You can optionally install and enable lefthook by running:
+
+```bash
+uv tool install lefthook --upgrade
+uvx lefthook install
+uvx lefthook validate
+```
+
+For alternative ways of installing lefthook, see <https://github.com/evilmartians/lefthook#install>
