@@ -11,7 +11,8 @@ from libcst.helpers import get_full_name_for_node
 from libcst.metadata import MetadataWrapper, QualifiedNameProvider, QualifiedNameSource
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    import types
+    from collections.abc import Mapping, Sequence
 
 __all__ = "Annotation", "ModuleSymbols", "Symbol", "collect_global_symbols"
 
@@ -99,7 +100,25 @@ class ModuleSymbols:
     all_: set[str] | None
 
 
-class _SymbolVisitor(cst.CSTVisitor):
+def _is_public(name: str) -> bool:
+    return not name.startswith("__") and not name.endswith("__") and name != "_"
+
+
+def _extract_names(expr: cst.BaseExpression) -> list[cst.Name]:
+    match expr:
+        case cst.Name():
+            return [expr]
+        case cst.Tuple(elements=elements) | cst.List(elements=elements):
+            names: list[cst.Name] = []
+            for element in elements:
+                if element.value is not None:
+                    names.extend(_extract_names(element.value))
+            return names
+        case _:
+            return []
+
+
+class _SymbolVisitor(cst.BatchableCSTVisitor):
     METADATA_DEPENDENCIES = (QualifiedNameProvider,)
     module: Final[cst.Module]
     symbols: Final[list[Symbol]]
@@ -258,38 +277,40 @@ class _SymbolVisitor(cst.CSTVisitor):
             return
 
 
+class _ExportsVisitor(GatherExportsVisitor, cst.BatchableCSTVisitor):
+    @override
+    def get_visitors(self) -> Mapping[str, types.MethodType]:
+        # workaround for https://github.com/Instagram/LibCST/pull/1439
+        return {
+            "visit_AnnAssign": self.visit_AnnAssign,
+            "visit_AugAssign": self.visit_AugAssign,
+            "visit_Assign": self.visit_Assign,
+            "visit_List": self.visit_List,
+            "leave_List": self.leave_List,
+            "visit_Tuple": self.visit_Tuple,
+            "leave_Tuple": self.leave_Tuple,
+            "visit_Set": self.visit_Set,
+            "leave_Set": self.leave_Set,
+            "visit_SimpleString": self.visit_SimpleString,
+            "visit_ConcatenatedString": self.visit_ConcatenatedString,
+        }
+
+
 def collect_global_symbols(source: str, /) -> ModuleSymbols:
     module = cst.parse_module(source)
     wrapper = MetadataWrapper(module)
-    visitor = _SymbolVisitor(wrapper.module)
-    exports_visitor = GatherExportsVisitor(CodemodContext())
-    wrapper.visit(visitor)
-    wrapper.visit(exports_visitor)
+    symbol_visitor = _SymbolVisitor(wrapper.module)
+    exports_visitor = _ExportsVisitor(CodemodContext())
+    wrapper.visit_batched([symbol_visitor, exports_visitor])
     exports = set(exports_visitor.explicit_exported_objects)
-    return ModuleSymbols(symbols=visitor.symbols, all_=exports or None)
-
-
-def _is_public(name: str) -> bool:
-    return not name.startswith("__") and not name.endswith("__") and name != "_"
-
-
-def _extract_names(expr: cst.BaseExpression) -> list[cst.Name]:
-    match expr:
-        case cst.Name():
-            return [expr]
-        case cst.Tuple(elements=elements) | cst.List(elements=elements):
-            names: list[cst.Name] = []
-            for element in elements:
-                if element.value is not None:
-                    names.extend(_extract_names(element.value))
-            return names
-        case _:
-            return []
+    return ModuleSymbols(symbols=symbol_visitor.symbols, all_=exports or None)
 
 
 @mainpy.main
 def example() -> None:
     src = """
+__all__ = ["SPAM1", "func", "MyClass"]
+
 SPAM1 = 123
 SPAM2: int = 123
 
