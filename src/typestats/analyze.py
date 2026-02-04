@@ -16,17 +16,17 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
 __all__ = (
-    "Annotation",
     "IgnoreComment",
     "Imports",
     "ModuleSymbols",
     "Symbol",
+    "TypeForm",
     "collect_global_symbols",
 )
 
 _EMPTY_MODULE: Final[cst.Module] = cst.Module([])
 
-type Annotation = Unknown | Expr | Function | Class
+type TypeForm = Unknown | Known | Expr | Function | Class
 
 
 class ParamKind(StrEnum):
@@ -49,6 +49,16 @@ UNKNOWN: Final[Unknown] = Unknown()
 
 
 @dataclass(frozen=True, slots=True)
+class Known:
+    @override
+    def __str__(self) -> str:
+        return "_"
+
+
+KNOWN: Final[Known] = Known()
+
+
+@dataclass(frozen=True, slots=True)
 class Expr:
     expr: cst.BaseExpression
 
@@ -61,7 +71,7 @@ class Expr:
 class Param:
     name: str
     kind: ParamKind
-    annotation: Annotation
+    annotation: TypeForm
 
     @override
     def __str__(self) -> str:
@@ -69,13 +79,15 @@ class Param:
             ParamKind.VAR_POSITIONAL: "*",
             ParamKind.VAR_KEYWORD: "**",
         }.get(self.kind, "")
+        if isinstance(self.annotation, Known):
+            return f"{prefix}{self.name}"
         return f"{prefix}{self.name}: {self.annotation}"
 
 
 @dataclass(frozen=True, slots=True)
 class Overload:
     params: list[Param]
-    returns: Annotation
+    returns: TypeForm
 
     @override
     def __str__(self) -> str:
@@ -113,7 +125,7 @@ class Class:
 @dataclass(slots=True)
 class Symbol:
     name: str
-    type_: Annotation
+    type_: TypeForm
 
     @override
     def __str__(self) -> str:
@@ -284,32 +296,51 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
             self.type_aliases.append(Symbol(name, Expr(value)))
 
     @staticmethod
-    def _param(param: cst.Param, kind: ParamKind) -> Param:
-        annotation = Expr(param.annotation.annotation) if param.annotation else UNKNOWN
+    def _param(
+        param: cst.Param,
+        kind: ParamKind,
+        known_name: str | None = None,
+    ) -> Param:
+        if (
+            known_name is not None
+            and param.name.value == known_name
+            and not param.annotation
+        ):
+            annotation = KNOWN
+        else:
+            annotation = (
+                Expr(param.annotation.annotation) if param.annotation else UNKNOWN
+            )
         return Param(param.name.value, kind, annotation)
 
-    def _add(self, name_node: cst.Name, annotation: Annotation) -> None:
+    def _add(self, name_node: cst.Name, annotation: TypeForm) -> None:
         name = self._symbol_name(name_node)
         if _is_public(self._leaf_name(name)):
             self.symbols.append(Symbol(name, annotation))
 
     @classmethod
-    def _callable_signature(cls, node: cst.FunctionDef) -> Overload:
+    def _callable_signature(
+        cls,
+        node: cst.FunctionDef,
+        known_name: str | None = None,
+    ) -> Overload:
         params: list[Param] = []
         for node_params, kind in [
             (node.params.posonly_params, ParamKind.POSITIONAL_ONLY),
             (node.params.params, ParamKind.POSITIONAL_OR_KEYWORD),
             (node.params.kwonly_params, ParamKind.KEYWORD_ONLY),
         ]:
-            params.extend(cls._param(param, kind) for param in node_params)
+            params.extend(cls._param(param, kind, known_name) for param in node_params)
 
         star_arg = node.params.star_arg
         if isinstance(star_arg, cst.Param):
-            params.append(cls._param(star_arg, ParamKind.VAR_POSITIONAL))
+            params.append(
+                cls._param(star_arg, ParamKind.VAR_POSITIONAL, known_name),
+            )
 
         star_kwarg = node.params.star_kwarg
         if isinstance(star_kwarg, cst.Param):
-            params.append(cls._param(star_kwarg, ParamKind.VAR_KEYWORD))
+            params.append(cls._param(star_kwarg, ParamKind.VAR_KEYWORD, known_name))
 
         return Overload(
             params,
@@ -343,9 +374,16 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
             }
             name = self._symbol_name(node.name)
 
+            if self._class_stack and "staticmethod" not in decorators:
+                known_name = "cls" if "classmethod" in decorators else "self"
+            else:
+                known_name = None
+
             if _is_public(self._leaf_name(name)):
                 if "overload" in decorators:
-                    self._overload_map[name].append(self._callable_signature(node))
+                    self._overload_map[name].append(
+                        self._callable_signature(node, known_name),
+                    )
                 elif "property" in decorators or "cached_property" in decorators:
                     self._add(
                         node.name,
@@ -355,7 +393,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
                     if overload_list := self._overload_map.pop(name, None):
                         overloads = overload_list[0], *overload_list[1:]
                     else:
-                        overloads = (self._callable_signature(node),)
+                        overloads = (self._callable_signature(node, known_name),)
 
                     self.symbols.append(Symbol(name, Function(name, overloads)))
                     self._added_functions.add(name)
@@ -595,6 +633,10 @@ class MyClass[T]:  # type: ignore[misc,deprecated]  # ty:ignore[deprecated]
         def nested(a: int) -> float:
             return a * 2
         return str(nested(x) + nested(y))
+
+    @classmethod
+    def class_method(cls) -> None:
+        pass
 """
     module_symbols = collect_global_symbols(src)
     print("Imports:", module_symbols.imports)  # noqa: T201
