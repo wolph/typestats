@@ -1,5 +1,5 @@
 import re
-from collections import deque
+from collections import defaultdict, deque
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Final, override
@@ -13,12 +13,12 @@ from libcst.metadata import MetadataWrapper, QualifiedNameProvider, QualifiedNam
 
 if TYPE_CHECKING:
     import types
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Mapping
 
 __all__ = (
     "Annotation",
     "IgnoreComment",
-    "ModuleImports",
+    "Imports",
     "ModuleSymbols",
     "Symbol",
     "collect_global_symbols",
@@ -26,7 +26,7 @@ __all__ = (
 
 _EMPTY_MODULE: Final[cst.Module] = cst.Module([])
 
-type Annotation = Unknown | ExprAnnotation | FunctionAnnotation | ClassAnnotation
+type Annotation = Unknown | Expr | Function | Class
 
 
 class ParamKind(StrEnum):
@@ -49,7 +49,7 @@ UNKNOWN: Final[Unknown] = Unknown()
 
 
 @dataclass(frozen=True, slots=True)
-class ExprAnnotation:
+class Expr:
     expr: cst.BaseExpression
 
     @override
@@ -58,7 +58,7 @@ class ExprAnnotation:
 
 
 @dataclass(frozen=True, slots=True)
-class ParamAnnotation:
+class Param:
     name: str
     kind: ParamKind
     annotation: Annotation
@@ -73,8 +73,8 @@ class ParamAnnotation:
 
 
 @dataclass(frozen=True, slots=True)
-class FunctionAnnotation:
-    params: list[ParamAnnotation]
+class Overload:
+    params: list[Param]
     returns: Annotation
 
     @override
@@ -84,7 +84,25 @@ class FunctionAnnotation:
 
 
 @dataclass(frozen=True, slots=True)
-class ClassAnnotation:
+class Function:
+    name: str
+    overloads: tuple[Overload, *tuple[Overload, ...]]
+
+    def __post_init__(self) -> None:
+        if not self.overloads:
+            msg = "FunctionOverloads must have at least one signature"
+            raise ValueError(msg)
+
+    @override
+    def __str__(self) -> str:
+        if len(self.overloads) == 1:
+            return str(self.overloads[0])
+        # an overloaded function type is the intersection of its overloads
+        return " & ".join(f"({sig})" for sig in self.overloads)
+
+
+@dataclass(frozen=True, slots=True)
+class Class:
     name: str
 
     @override
@@ -103,7 +121,7 @@ class Symbol:
 
 
 @dataclass(slots=True)
-class ModuleImports:
+class Imports:
     imports: dict[str, str]
 
     @override
@@ -125,11 +143,11 @@ class IgnoreComment:
 
 @dataclass(slots=True)
 class ModuleSymbols:
-    symbols: list[Symbol]
-    type_aliases: list[Symbol]
+    imports: Imports
     exports_explicit: frozenset[str] | None  # __all__
     exports_implicit: frozenset[str]  # [from _ ]import $name as $name
-    imports: ModuleImports
+    symbols: list[Symbol]
+    type_aliases: list[Symbol]
     ignore_comments: list[IgnoreComment]
 
 
@@ -169,6 +187,8 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
     type_aliases: Final[list[Symbol]]
     _class_stack: Final[deque[str]]
     _function_depth: int
+    _overload_map: defaultdict[str, list[Overload]]
+    _added_functions: set[str]
 
     def __init__(self, module: cst.Module, /) -> None:
         self.module = module
@@ -176,11 +196,14 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         self.type_aliases = []
         self._class_stack = deque()
         self._function_depth = 0
+        self._overload_map = defaultdict(list)
+        self._added_functions = set()
 
     def _qualified_name(self, node: cst.CSTNode) -> str | None:
         names = self.get_metadata(QualifiedNameProvider, node, default=set())
         if not names:
             return None
+
         preferred = next(
             (qn for qn in names if qn.source is not QualifiedNameSource.LOCAL),
             None,
@@ -204,6 +227,12 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
     def _class_display_name(self, node: cst.ClassDef) -> str:
         return self._display_name_for(node, node.name.value)
 
+    def _symbol_name(self, name_node: cst.Name) -> str:
+        name = self._display_name(name_node)
+        if self._class_stack and self._function_depth == 0 and "." not in name:
+            name = f"{self._class_stack[-1]}.{name}"
+        return name
+
     @staticmethod
     def _leaf_name(name: str) -> str:
         return name.rsplit(".", 1)[-1]
@@ -211,17 +240,17 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
     @classmethod
     def _is_typealias_annotation(cls, annotation: cst.BaseExpression) -> bool:
         full_name = get_full_name_for_node(annotation)
-        if full_name is None:
-            return False
-        return cls._leaf_name(full_name) == "TypeAlias"
+        return full_name is not None and cls._leaf_name(full_name) == "TypeAlias"
 
     @classmethod
     def _is_special_typeform(cls, expr: cst.BaseExpression) -> bool:
         if not isinstance(expr, cst.Call):
             return False
+
         full_name = get_full_name_for_node(expr.func)
         if full_name is None:
             return False
+
         return cls._leaf_name(full_name) in cls._TYPEFORMS
 
     @classmethod
@@ -231,158 +260,163 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
     ) -> cst.BaseExpression | None:
         if not isinstance(expr, cst.Call):
             return None
+
         full_name = get_full_name_for_node(expr.func)
         if full_name is None or cls._leaf_name(full_name) != "TypeAliasType":
             return None
+
         positional_args = [arg for arg in expr.args if arg.keyword is None]
         if len(positional_args) > cls._TYPEALIAS_VALUE_INDEX:
             return positional_args[cls._TYPEALIAS_VALUE_INDEX].value
+
         for arg in expr.args:
             if arg.keyword and arg.keyword.value == "value":
                 return arg.value
+
         return None
 
     def _add_type_alias(self, name_node: cst.Name, value: cst.BaseExpression) -> None:
         name = self._display_name(name_node)
         if self._class_stack and self._function_depth == 0 and "." not in name:
             name = f"{self._class_stack[-1]}.{name}"
+
         if _is_public(self._leaf_name(name)):
-            self.type_aliases.append(Symbol(name, ExprAnnotation(value)))
+            self.type_aliases.append(Symbol(name, Expr(value)))
 
     @staticmethod
-    def _param_annotation(param: cst.Param, kind: ParamKind) -> ParamAnnotation:
-        annotation = (
-            ExprAnnotation(param.annotation.annotation) if param.annotation else UNKNOWN
-        )
-        return ParamAnnotation(name=param.name.value, kind=kind, annotation=annotation)
+    def _param(param: cst.Param, kind: ParamKind) -> Param:
+        annotation = Expr(param.annotation.annotation) if param.annotation else UNKNOWN
+        return Param(param.name.value, kind, annotation)
 
-    @classmethod
-    def _extend_params(
-        cls,
-        params: list[ParamAnnotation],
-        items: Sequence[cst.Param],
-        kind: ParamKind,
-    ) -> None:
-        params.extend(cls._param_annotation(param, kind) for param in items)
-
-    def add(self, name_node: cst.Name, annotation: Annotation) -> None:
-        name = self._display_name(name_node)
-        if self._class_stack and self._function_depth == 0 and "." not in name:
-            name = f"{self._class_stack[-1]}.{name}"
+    def _add(self, name_node: cst.Name, annotation: Annotation) -> None:
+        name = self._symbol_name(name_node)
         if _is_public(self._leaf_name(name)):
             self.symbols.append(Symbol(name, annotation))
 
-    @staticmethod
-    def signature_annotation(node: cst.FunctionDef) -> FunctionAnnotation:
-        params: list[ParamAnnotation] = []
+    @classmethod
+    def _callable_signature(cls, node: cst.FunctionDef) -> Overload:
+        params: list[Param] = []
         for node_params, kind in [
             (node.params.posonly_params, ParamKind.POSITIONAL_ONLY),
             (node.params.params, ParamKind.POSITIONAL_OR_KEYWORD),
             (node.params.kwonly_params, ParamKind.KEYWORD_ONLY),
         ]:
-            _SymbolVisitor._extend_params(params, node_params, kind)
+            params.extend(cls._param(param, kind) for param in node_params)
 
         star_arg = node.params.star_arg
         if isinstance(star_arg, cst.Param):
-            params.append(
-                _SymbolVisitor._param_annotation(star_arg, ParamKind.VAR_POSITIONAL),
-            )
+            params.append(cls._param(star_arg, ParamKind.VAR_POSITIONAL))
 
         star_kwarg = node.params.star_kwarg
         if isinstance(star_kwarg, cst.Param):
-            params.append(
-                _SymbolVisitor._param_annotation(star_kwarg, ParamKind.VAR_KEYWORD),
-            )
+            params.append(cls._param(star_kwarg, ParamKind.VAR_KEYWORD))
 
-        returns = ExprAnnotation(node.returns.annotation) if node.returns else UNKNOWN
-        return FunctionAnnotation(params=params, returns=returns)
+        return Overload(
+            params,
+            Expr(node.returns.annotation) if node.returns else UNKNOWN,
+        )
 
     @override
     def visit_ClassDef(self, node: cst.ClassDef) -> bool:
         if self._function_depth != 0:
             return False
+
         class_name = self._class_display_name(node)
         if _is_public(self._leaf_name(class_name)):
-            self.symbols.append(Symbol(class_name, ClassAnnotation(name=class_name)))
+            self.symbols.append(Symbol(class_name, Class(class_name)))
+
         self._class_stack.append(class_name)
         return True
 
     @override
     def leave_ClassDef(self, original_node: cst.ClassDef) -> None:
-        del original_node
         if self._class_stack:
             self._class_stack.pop()
 
     @override
     def visit_FunctionDef(self, node: cst.FunctionDef) -> bool:
         if self._function_depth == 0:
-            if self._class_stack:
-                name = node.name.value
-                if _is_public(name):
-                    decorators = {
-                        self._leaf_name(full)
-                        for dec in node.decorators
-                        if (full := get_full_name_for_node(dec.decorator))
-                    }
-                    if "property" in decorators or "cached_property" in decorators:
-                        annotation = (
-                            ExprAnnotation(node.returns.annotation)
-                            if node.returns
-                            else UNKNOWN
-                        )
+            decorators = {
+                self._leaf_name(full)
+                for dec in node.decorators
+                if (full := get_full_name_for_node(dec.decorator))
+            }
+            name = self._symbol_name(node.name)
+
+            if _is_public(self._leaf_name(name)):
+                if "overload" in decorators:
+                    self._overload_map[name].append(self._callable_signature(node))
+                elif "property" in decorators or "cached_property" in decorators:
+                    self._add(
+                        node.name,
+                        Expr(node.returns.annotation) if node.returns else UNKNOWN,
+                    )
+                else:
+                    if overload_list := self._overload_map.pop(name, None):
+                        overloads = overload_list[0], *overload_list[1:]
                     else:
-                        annotation = self.signature_annotation(node)
-                    self.add(node.name, annotation)
-            else:
-                self.add(node.name, self.signature_annotation(node))
+                        overloads = (self._callable_signature(node),)
+
+                    self.symbols.append(Symbol(name, Function(name, overloads)))
+                    self._added_functions.add(name)
+
         self._function_depth += 1
         return True
 
     @override
     def leave_FunctionDef(self, original_node: cst.FunctionDef) -> None:
-        del original_node
         self._function_depth -= 1
+
+    @override
+    def leave_Module(self, original_node: cst.Module) -> None:
+        for name, overloads in self._overload_map.items():
+            if name in self._added_functions or not _is_public(self._leaf_name(name)):
+                continue
+
+            self.symbols.append(
+                Symbol(name, Function(name, (overloads[0], *overloads[1:]))),
+            )
 
     @override
     def visit_AnnAssign(self, node: cst.AnnAssign) -> None:
         if self._function_depth != 0:
             return
+
         if node.value is not None and self._is_typealias_annotation(
             node.annotation.annotation,
         ):
             for name_node in _extract_names(node.target):
                 self._add_type_alias(name_node, node.value)
             return
+
         if node.value is not None and self._is_special_typeform(node.value):
             return
+
         for name_node in _extract_names(node.target):
-            self.add(name_node, ExprAnnotation(node.annotation.annotation))
+            self._add(name_node, Expr(node.annotation.annotation))
 
     @override
     def visit_Assign(self, node: cst.Assign) -> None:
         if self._function_depth != 0:
             return
+
         if typealias_value := self._typealias_value_from_call(node.value):
             for target in node.targets:
                 for name_node in _extract_names(target.target):
                     self._add_type_alias(name_node, typealias_value)
             return
+
         if self._is_special_typeform(node.value):
             return
+
         for target in node.targets:
             for name_node in _extract_names(target.target):
-                self.add(name_node, UNKNOWN)
-
-    @override
-    def visit_AugAssign(self, node: cst.AugAssign) -> None:
-        if self._function_depth != 0:
-            return
+                self._add(name_node, UNKNOWN)
 
     @override
     def visit_TypeAlias(self, node: cst.TypeAlias) -> None:
-        if self._function_depth != 0:
-            return
-        self._add_type_alias(node.name, node.value)
+        if self._function_depth == 0:
+            self._add_type_alias(node.name, node.value)
 
 
 class _ExportsVisitor(GatherExportsVisitor, cst.BatchableCSTVisitor):
@@ -514,7 +548,7 @@ def collect_global_symbols(source: str, /) -> ModuleSymbols:
         for name, alias in aliases
         if name == alias
     )
-    imports = ModuleImports(imports=import_mappings)
+    imports = Imports(imports=import_mappings)
 
     return ModuleSymbols(
         symbols=symbol_visitor.symbols,
@@ -529,7 +563,7 @@ def collect_global_symbols(source: str, /) -> ModuleSymbols:
 @mainpy.main
 def example() -> None:
     src = """
-from typing import TypeAlias, TypeVar
+from typing import TypeAlias, TypeVar, overload
 from a import spam as spam, ham as bacon
 
 __all__ = ["SPAM1", "func", "MyClass"]
@@ -546,6 +580,13 @@ def func(a: int, *args, **kwds) -> str:
     def nested(c: int) -> float:
         return c * 2
     return str(nested(a) + nested(b))
+
+@overload
+def overloaded(x: int) -> int: ...
+@overload
+def overloaded(x: str) -> str: ...
+def overloaded(x):
+    return x
 
 class MyClass[T]:  # type: ignore[misc,deprecated]  # ty:ignore[deprecated]
     attr: T

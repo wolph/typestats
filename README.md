@@ -23,7 +23,7 @@ For a given project:
    - imports and implicit re-exports (i.e. `from a import b as b`)
    - type aliases (`_: TypeAlias = ...` and `type _ = ...`)
    - type-ignore comments (`# (type|pyright|pyrefly|ty): ignore`)
-   - TODO: overloads
+   - overloaded functions/methods
 7. TODO: Inline type aliases where used in annotations (so we can determine the `Any`-ness)
 8. TODO: Unify `.py` and `.pyi` annotations for each symbol
 9. TODO: Filter out any of the non-public symbols (requires following imports)
