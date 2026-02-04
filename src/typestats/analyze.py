@@ -20,6 +20,7 @@ __all__ = (
     "Imports",
     "ModuleSymbols",
     "Symbol",
+    "TypeAlias",
     "TypeForm",
     "collect_global_symbols",
 )
@@ -129,6 +130,16 @@ class Symbol:
 
 
 @dataclass(slots=True)
+class TypeAlias:
+    name: str
+    value: TypeForm
+
+    @override
+    def __str__(self) -> str:
+        return f"type {self.name} = {self.value}"
+
+
+@dataclass(slots=True)
 class Imports:
     imports: dict[str, str]
 
@@ -155,7 +166,7 @@ class ModuleSymbols:
     exports_explicit: frozenset[str] | None  # __all__
     exports_implicit: frozenset[str]  # [from _ ]import $name as $name
     symbols: list[Symbol]
-    type_aliases: list[Symbol]
+    type_aliases: list[TypeAlias]
     ignore_comments: list[IgnoreComment]
 
 
@@ -192,7 +203,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
 
     module: Final[cst.Module]
     symbols: Final[list[Symbol]]
-    type_aliases: Final[list[Symbol]]
+    type_aliases: Final[list[TypeAlias]]
     _class_stack: Final[deque[str]]
     _function_depth: int
     _overload_map: defaultdict[str, list[Overload]]
@@ -289,7 +300,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
             name = f"{self._class_stack[-1]}.{name}"
 
         if _is_public(self._leaf_name(name)):
-            self.type_aliases.append(Symbol(name, Expr(value)))
+            self.type_aliases.append(TypeAlias(name, Expr(value)))
 
     @staticmethod
     def _param(
@@ -641,7 +652,7 @@ class MyClass[T]:  # type: ignore[misc,deprecated]  # ty:ignore[deprecated]
 
     print()  # noqa: T201
     for alias in module_symbols.type_aliases:
-        print(f"{alias.name} = {alias.type_}")  # noqa: T201
+        print(alias)  # noqa: T201
 
     print()  # noqa: T201
     for symbol in module_symbols.symbols:
