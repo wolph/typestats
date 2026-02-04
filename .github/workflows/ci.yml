@@ -42,3 +42,12 @@ jobs:
       - uses: astral-sh/setup-uv@v7.2.1
       - name: pyrefly check
         run: uv run pyrefly check --output-format=github
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - uses: astral-sh/setup-uv@v7.2.1
+      - name: pytest
+        run: uv run pytest
