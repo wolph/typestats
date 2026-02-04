@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Final, override
 import libcst as cst
 import mainpy
 from libcst.codemod import CodemodContext
-from libcst.codemod.visitors import GatherExportsVisitor
+from libcst.codemod.visitors import GatherExportsVisitor, GatherImportsVisitor
 from libcst.helpers import get_full_name_for_node
 from libcst.metadata import MetadataWrapper, QualifiedNameProvider, QualifiedNameSource
 
@@ -14,7 +14,13 @@ if TYPE_CHECKING:
     import types
     from collections.abc import Mapping, Sequence
 
-__all__ = "Annotation", "ModuleSymbols", "Symbol", "collect_global_symbols"
+__all__ = (
+    "Annotation",
+    "ModuleImports",
+    "ModuleSymbols",
+    "Symbol",
+    "collect_global_symbols",
+)
 
 _EMPTY_MODULE: Final[cst.Module] = cst.Module([])
 
@@ -95,9 +101,20 @@ class Symbol:
 
 
 @dataclass(slots=True)
+class ModuleImports:
+    imports: dict[str, str]
+
+    @override
+    def __str__(self) -> str:
+        return str(self.imports)
+
+
+@dataclass(slots=True)
 class ModuleSymbols:
     symbols: list[Symbol]
-    all_: set[str] | None
+    exports_explicit: frozenset[str] | None  # __all__
+    exports_implicit: frozenset[str]  # [from _ ]import $name as $name
+    imports: ModuleImports
 
 
 def _is_public(name: str) -> bool:
@@ -301,18 +318,55 @@ def collect_global_symbols(source: str, /) -> ModuleSymbols:
     wrapper = MetadataWrapper(module)
     symbol_visitor = _SymbolVisitor(wrapper.module)
     exports_visitor = _ExportsVisitor(CodemodContext())
+    imports_visitor = GatherImportsVisitor(CodemodContext())
     wrapper.visit_batched([symbol_visitor, exports_visitor])
-    exports = set(exports_visitor.explicit_exported_objects)
-    return ModuleSymbols(symbols=symbol_visitor.symbols, all_=exports or None)
+    wrapper.module.visit(imports_visitor)
+
+    exports = frozenset(exports_visitor.explicit_exported_objects)
+
+    import_mappings: dict[str, str] = {
+        module: module for module in imports_visitor.module_imports
+    }
+    import_mappings.update(imports_visitor.module_aliases)
+    import_mappings.update({
+        f"{module}.{obj}": obj
+        for module, objects in imports_visitor.object_mapping.items()
+        for obj in objects
+    })
+    import_mappings.update({
+        f"{module}.{obj}": alias
+        for module, aliases in imports_visitor.alias_mapping.items()
+        for obj, alias in aliases
+    })
+    reexports = frozenset(
+        name
+        for aliases in imports_visitor.alias_mapping.values()
+        for name, alias in aliases
+        if name == alias
+    )
+    imports = ModuleImports(imports=import_mappings)
+
+    return ModuleSymbols(
+        symbols=symbol_visitor.symbols,
+        exports_explicit=exports or None,
+        exports_implicit=reexports,
+        imports=imports,
+    )
 
 
 @mainpy.main
 def example() -> None:
     src = """
+from typing import TypeAlias
+from a import spam as spam, ham as bacon
+
 __all__ = ["SPAM1", "func", "MyClass"]
 
 SPAM1 = 123
 SPAM2: int = 123
+
+Ham: TypeAlias = bytes | int
+type Bacon = str | float
 
 def func(a: int, *args, **kwds) -> str:
     def nested(c: int) -> float:
@@ -328,7 +382,9 @@ class MyClass[T]:
         return str(nested(x) + nested(y))
 """
     module_symbols = collect_global_symbols(src)
-    print("Exports:", module_symbols.all_)  # noqa: T201
+    print("Imports:", module_symbols.imports)  # noqa: T201
+    print("Exports (explicit):", module_symbols.exports_explicit)  # noqa: T201
+    print("Exports (implicit):", module_symbols.exports_implicit)  # noqa: T201
     print()  # noqa: T201
 
     for symbol in module_symbols.symbols:
