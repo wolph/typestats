@@ -55,7 +55,7 @@ strict = true
 # pyrefly
 
 [tool.pyrefly]
-project-includes = ["src", "tests"]
+enabled-ignores = ["pyrefly"]
 
 # (based)pyright
 
