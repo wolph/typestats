@@ -38,12 +38,24 @@ dev = [
   "dprint-py>=0.51.1.0",
   "pyrefly>=0.51.0",
   "ruff>=0.15.0",
+  "pytest>=9.0.2",
 ]
+
+# pytest
+
+[tool.pytest]
+minversion = "9.0"
+testpaths = ["src", "tests"]
+addopts = ["-ra", "--doctest-modules"]
+doctest_optionflags = ["NORMALIZE_WHITESPACE", "IGNORE_EXCEPTION_DETAIL", "ELLIPSIS"]
+filterwarnings = ["error"]
+log_level = "INFO"
+strict = true
 
 # pyrefly
 
 [tool.pyrefly]
-project-includes = ["src"]
+project-includes = ["src", "tests"]
 
 # (based)pyright
 
@@ -63,7 +75,7 @@ reportUnnecessaryTypeIgnoreComment = true
 # ruff
 
 [tool.ruff]
-src = ["src/typestats"]
+src = ["src", "tests"]
 extend-exclude = [".git", ".mypy_cache", ".tox", ".venv"]
 force-exclude = true
 show-fixes = true

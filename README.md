@@ -53,8 +53,8 @@ uv sync
 ```
 
 In CI we currently run [ruff](https://github.com/astral-sh/ruff),
-[dprint](https://github.com/dprint/dprint), and [pyrefly](https://github.com/facebook/pyrefly).
-It's easy to run them locally as well, just
+[dprint](https://github.com/dprint/dprint), [pyrefly](https://github.com/facebook/pyrefly), and
+[pytest](https://github.com/pytest-dev/pytest). It's easy to run them locally as well, just
 
 ```bash
 uv run ruff check
@@ -64,6 +64,8 @@ uv run dprint check
 uv run dprint fmt
 
 uv run pyrefly check
+
+uv run pytest
 ```
 
 (`uv run` can be omitted if you manually activated the virtual environment created by `uv`)
