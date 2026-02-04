@@ -137,6 +137,16 @@ def _extract_names(expr: cst.BaseExpression) -> list[cst.Name]:
 
 class _SymbolVisitor(cst.BatchableCSTVisitor):
     METADATA_DEPENDENCIES = (QualifiedNameProvider,)
+    _TYPEFORMS: Final[frozenset[str]] = frozenset({
+        "namedtuple",
+        "NewType",
+        "ParamSpec",
+        "TypeAliasType",
+        "TypedDict",
+        "TypeVar",
+        "TypeVarTuple",
+    })
+
     module: Final[cst.Module]
     symbols: Final[list[Symbol]]
     _class_stack: Final[deque[str]]
@@ -178,6 +188,15 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
     @staticmethod
     def _leaf_name(name: str) -> str:
         return name.rsplit(".", 1)[-1]
+
+    @classmethod
+    def _is_special_typeform(cls, expr: cst.BaseExpression) -> bool:
+        if not isinstance(expr, cst.Call):
+            return False
+        full_name = get_full_name_for_node(expr.func)
+        if full_name is None:
+            return False
+        return cls._leaf_name(full_name) in cls._TYPEFORMS
 
     @staticmethod
     def _param_annotation(param: cst.Param, kind: ParamKind) -> ParamAnnotation:
@@ -277,12 +296,16 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
     def visit_AnnAssign(self, node: cst.AnnAssign) -> None:
         if self._function_depth != 0:
             return
+        if node.value is not None and self._is_special_typeform(node.value):
+            return
         for name_node in _extract_names(node.target):
             self.add(name_node, ExprAnnotation(node.annotation.annotation))
 
     @override
     def visit_Assign(self, node: cst.Assign) -> None:
         if self._function_depth != 0:
+            return
+        if self._is_special_typeform(node.value):
             return
         for target in node.targets:
             for name_node in _extract_names(target.target):
@@ -397,13 +420,15 @@ def collect_global_symbols(source: str, /) -> ModuleSymbols:
 @mainpy.main
 def example() -> None:
     src = """
-from typing import TypeAlias
+from typing import TypeAlias, TypeVar
 from a import spam as spam, ham as bacon
 
 __all__ = ["SPAM1", "func", "MyClass"]
 
 SPAM1 = 123
 SPAM2: int = 123
+
+_T = TypeVar("_T")
 
 Ham: TypeAlias = bytes | int
 type Bacon = str | float
