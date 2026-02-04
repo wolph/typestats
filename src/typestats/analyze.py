@@ -299,12 +299,11 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
     def _param(
         param: cst.Param,
         kind: ParamKind,
-        *,
-        known_unannotated_self: bool = False,
+        known_name: str | None = None,
     ) -> Param:
         if (
-            known_unannotated_self
-            and param.name.value == "self"
+            known_name is not None
+            and param.name.value == known_name
             and not param.annotation
         ):
             annotation = KNOWN
@@ -323,8 +322,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
     def _callable_signature(
         cls,
         node: cst.FunctionDef,
-        *,
-        known_unannotated_self: bool = False,
+        known_name: str | None = None,
     ) -> Overload:
         params: list[Param] = []
         for node_params, kind in [
@@ -332,34 +330,17 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
             (node.params.params, ParamKind.POSITIONAL_OR_KEYWORD),
             (node.params.kwonly_params, ParamKind.KEYWORD_ONLY),
         ]:
-            params.extend(
-                cls._param(
-                    param,
-                    kind,
-                    known_unannotated_self=known_unannotated_self,
-                )
-                for param in node_params
-            )
+            params.extend(cls._param(param, kind, known_name) for param in node_params)
 
         star_arg = node.params.star_arg
         if isinstance(star_arg, cst.Param):
             params.append(
-                cls._param(
-                    star_arg,
-                    ParamKind.VAR_POSITIONAL,
-                    known_unannotated_self=known_unannotated_self,
-                ),
+                cls._param(star_arg, ParamKind.VAR_POSITIONAL, known_name),
             )
 
         star_kwarg = node.params.star_kwarg
         if isinstance(star_kwarg, cst.Param):
-            params.append(
-                cls._param(
-                    star_kwarg,
-                    ParamKind.VAR_KEYWORD,
-                    known_unannotated_self=known_unannotated_self,
-                ),
-            )
+            params.append(cls._param(star_kwarg, ParamKind.VAR_KEYWORD, known_name))
 
         return Overload(
             params,
@@ -392,15 +373,16 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
                 if (full := get_full_name_for_node(dec.decorator))
             }
             name = self._symbol_name(node.name)
-            known_unannotated_self = bool(self._class_stack)
+
+            if self._class_stack and "staticmethod" not in decorators:
+                known_name = "cls" if "classmethod" in decorators else "self"
+            else:
+                known_name = None
 
             if _is_public(self._leaf_name(name)):
                 if "overload" in decorators:
                     self._overload_map[name].append(
-                        self._callable_signature(
-                            node,
-                            known_unannotated_self=known_unannotated_self,
-                        ),
+                        self._callable_signature(node, known_name),
                     )
                 elif "property" in decorators or "cached_property" in decorators:
                     self._add(
@@ -411,12 +393,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
                     if overload_list := self._overload_map.pop(name, None):
                         overloads = overload_list[0], *overload_list[1:]
                     else:
-                        overloads = (
-                            self._callable_signature(
-                                node,
-                                known_unannotated_self=known_unannotated_self,
-                            ),
-                        )
+                        overloads = (self._callable_signature(node, known_name),)
 
                     self.symbols.append(Symbol(name, Function(name, overloads)))
                     self._added_functions.add(name)
@@ -656,6 +633,10 @@ class MyClass[T]:  # type: ignore[misc,deprecated]  # ty:ignore[deprecated]
         def nested(a: int) -> float:
             return a * 2
         return str(nested(x) + nested(y))
+
+    @classmethod
+    def class_method(cls) -> None:
+        pass
 """
     module_symbols = collect_global_symbols(src)
     print("Imports:", module_symbols.imports)  # noqa: T201
