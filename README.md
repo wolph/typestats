@@ -20,7 +20,7 @@ For a given project:
 6. For each file in sorted order, parse the file using `libcst`, and extract:
    - all annotatable global symbols and their type annotations
    - the `__all__` exports (if defined)
-   - TODO: the imports (module imports, module aliases, object mappings, alias mappings)
+   - imports and implicit re-exports (i.e. `from a import b as b`)
    - TODO: type aliases (`_: TypeAlias = ...` and `type _ = ...`)
    - TODO: type-ignore comments (`# (type|pyright|pyrefly|ty): ignore`)
    - TODO: overloads
