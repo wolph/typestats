@@ -295,6 +295,12 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
 
 
 class _ExportsVisitor(GatherExportsVisitor, cst.BatchableCSTVisitor):
+    has_explicit_all: bool
+
+    def __init__(self, context: CodemodContext) -> None:
+        super().__init__(context)
+        self.has_explicit_all = False
+
     @override
     def get_visitors(self) -> Mapping[str, types.MethodType]:
         # workaround for https://github.com/Instagram/LibCST/pull/1439
@@ -312,6 +318,34 @@ class _ExportsVisitor(GatherExportsVisitor, cst.BatchableCSTVisitor):
             "visit_ConcatenatedString": self.visit_ConcatenatedString,
         }
 
+    @staticmethod
+    def _is_all_target(target: cst.BaseExpression) -> bool:
+        return get_full_name_for_node(target) == "__all__"
+
+    @property
+    def exports_explicit(self) -> frozenset[str] | None:
+        return (
+            frozenset(self.explicit_exported_objects) if self.has_explicit_all else None
+        )
+
+    @override
+    def visit_AnnAssign(self, node: cst.AnnAssign) -> bool:
+        if self._is_all_target(node.target):
+            self.has_explicit_all = True
+        return super().visit_AnnAssign(node)
+
+    @override
+    def visit_AugAssign(self, node: cst.AugAssign) -> bool:
+        if self._is_all_target(node.target):
+            self.has_explicit_all = True
+        return super().visit_AugAssign(node)
+
+    @override
+    def visit_Assign(self, node: cst.Assign) -> bool:
+        if any(self._is_all_target(target.target) for target in node.targets):
+            self.has_explicit_all = True
+        return super().visit_Assign(node)
+
 
 def collect_global_symbols(source: str, /) -> ModuleSymbols:
     module = cst.parse_module(source)
@@ -321,8 +355,6 @@ def collect_global_symbols(source: str, /) -> ModuleSymbols:
     imports_visitor = GatherImportsVisitor(CodemodContext())
     wrapper.visit_batched([symbol_visitor, exports_visitor])
     wrapper.module.visit(imports_visitor)
-
-    exports = frozenset(exports_visitor.explicit_exported_objects)
 
     import_mappings: dict[str, str] = {
         module: module for module in imports_visitor.module_imports
@@ -348,7 +380,7 @@ def collect_global_symbols(source: str, /) -> ModuleSymbols:
 
     return ModuleSymbols(
         symbols=symbol_visitor.symbols,
-        exports_explicit=exports or None,
+        exports_explicit=exports_visitor.exports_explicit,
         exports_implicit=reexports,
         imports=imports,
     )
