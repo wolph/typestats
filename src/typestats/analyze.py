@@ -119,7 +119,7 @@ class Class:
         return f"type[{self.name}]"
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class Symbol:
     name: str
     type_: TypeForm
@@ -129,7 +129,7 @@ class Symbol:
         return f"{self.name}: {self.type_}"
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class TypeAlias:
     name: str
     value: TypeForm
@@ -139,7 +139,7 @@ class TypeAlias:
         return f"type {self.name} = {self.value}"
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class Imports:
     imports: dict[str, str]
 
@@ -160,7 +160,7 @@ class IgnoreComment:
         return f"{self.kind}: ignore[{', '.join(sorted(self.rules))}]"
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class ModuleSymbols:
     imports: Imports
     exports_explicit: frozenset[str] | None  # __all__
