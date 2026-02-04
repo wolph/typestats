@@ -93,11 +93,11 @@ class ClassAnnotation:
 @dataclass(slots=True)
 class Symbol:
     name: str
-    annotation: Annotation
+    type_: Annotation
 
     @override
     def __str__(self) -> str:
-        return f"{self.name}: {self.annotation}"
+        return f"{self.name}: {self.type_}"
 
 
 @dataclass(slots=True)
@@ -112,6 +112,7 @@ class ModuleImports:
 @dataclass(slots=True)
 class ModuleSymbols:
     symbols: list[Symbol]
+    type_aliases: list[Symbol]
     exports_explicit: frozenset[str] | None  # __all__
     exports_implicit: frozenset[str]  # [from _ ]import $name as $name
     imports: ModuleImports
@@ -146,15 +147,18 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         "TypeVar",
         "TypeVarTuple",
     })
+    _TYPEALIAS_VALUE_INDEX: Final[int] = 1
 
     module: Final[cst.Module]
     symbols: Final[list[Symbol]]
+    type_aliases: Final[list[Symbol]]
     _class_stack: Final[deque[str]]
     _function_depth: int
 
     def __init__(self, module: cst.Module, /) -> None:
         self.module = module
         self.symbols = []
+        self.type_aliases = []
         self._class_stack = deque()
         self._function_depth = 0
 
@@ -190,6 +194,13 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         return name.rsplit(".", 1)[-1]
 
     @classmethod
+    def _is_typealias_annotation(cls, annotation: cst.BaseExpression) -> bool:
+        full_name = get_full_name_for_node(annotation)
+        if full_name is None:
+            return False
+        return cls._leaf_name(full_name) == "TypeAlias"
+
+    @classmethod
     def _is_special_typeform(cls, expr: cst.BaseExpression) -> bool:
         if not isinstance(expr, cst.Call):
             return False
@@ -197,6 +208,31 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         if full_name is None:
             return False
         return cls._leaf_name(full_name) in cls._TYPEFORMS
+
+    @classmethod
+    def _typealias_value_from_call(
+        cls,
+        expr: cst.BaseExpression,
+    ) -> cst.BaseExpression | None:
+        if not isinstance(expr, cst.Call):
+            return None
+        full_name = get_full_name_for_node(expr.func)
+        if full_name is None or cls._leaf_name(full_name) != "TypeAliasType":
+            return None
+        positional_args = [arg for arg in expr.args if arg.keyword is None]
+        if len(positional_args) > cls._TYPEALIAS_VALUE_INDEX:
+            return positional_args[cls._TYPEALIAS_VALUE_INDEX].value
+        for arg in expr.args:
+            if arg.keyword and arg.keyword.value == "value":
+                return arg.value
+        return None
+
+    def _add_type_alias(self, name_node: cst.Name, value: cst.BaseExpression) -> None:
+        name = self._display_name(name_node)
+        if self._class_stack and self._function_depth == 0 and "." not in name:
+            name = f"{self._class_stack[-1]}.{name}"
+        if _is_public(self._leaf_name(name)):
+            self.type_aliases.append(Symbol(name, ExprAnnotation(value)))
 
     @staticmethod
     def _param_annotation(param: cst.Param, kind: ParamKind) -> ParamAnnotation:
@@ -296,6 +332,12 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
     def visit_AnnAssign(self, node: cst.AnnAssign) -> None:
         if self._function_depth != 0:
             return
+        if node.value is not None and self._is_typealias_annotation(
+            node.annotation.annotation,
+        ):
+            for name_node in _extract_names(node.target):
+                self._add_type_alias(name_node, node.value)
+            return
         if node.value is not None and self._is_special_typeform(node.value):
             return
         for name_node in _extract_names(node.target):
@@ -304,6 +346,11 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
     @override
     def visit_Assign(self, node: cst.Assign) -> None:
         if self._function_depth != 0:
+            return
+        if typealias_value := self._typealias_value_from_call(node.value):
+            for target in node.targets:
+                for name_node in _extract_names(target.target):
+                    self._add_type_alias(name_node, typealias_value)
             return
         if self._is_special_typeform(node.value):
             return
@@ -315,6 +362,12 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
     def visit_AugAssign(self, node: cst.AugAssign) -> None:
         if self._function_depth != 0:
             return
+
+    @override
+    def visit_TypeAlias(self, node: cst.TypeAlias) -> None:
+        if self._function_depth != 0:
+            return
+        self._add_type_alias(node.name, node.value)
 
 
 class _ExportsVisitor(GatherExportsVisitor, cst.BatchableCSTVisitor):
@@ -411,6 +464,7 @@ def collect_global_symbols(source: str, /) -> ModuleSymbols:
 
     return ModuleSymbols(
         symbols=symbol_visitor.symbols,
+        type_aliases=symbol_visitor.type_aliases,
         exports_explicit=exports_visitor.exports_explicit,
         exports_implicit=reexports,
         imports=imports,
@@ -450,7 +504,11 @@ class MyClass[T]:
     print("Imports:", module_symbols.imports)  # noqa: T201
     print("Exports (explicit):", module_symbols.exports_explicit)  # noqa: T201
     print("Exports (implicit):", module_symbols.exports_implicit)  # noqa: T201
-    print()  # noqa: T201
 
+    print()  # noqa: T201
+    for symbol in module_symbols.type_aliases:
+        print(f"{symbol.name} = {symbol.type_}")  # noqa: T201
+
+    print()  # noqa: T201
     for symbol in module_symbols.symbols:
-        print(f"{symbol.name}: {symbol.annotation}")  # noqa: T201
+        print(f"{symbol.name}: {symbol.type_}")  # noqa: T201

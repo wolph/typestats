@@ -21,7 +21,7 @@ For a given project:
    - all annotatable global symbols and their type annotations
    - the `__all__` exports (if defined)
    - imports and implicit re-exports (i.e. `from a import b as b`)
-   - TODO: type aliases (`_: TypeAlias = ...` and `type _ = ...`)
+   - type aliases (`_: TypeAlias = ...` and `type _ = ...`)
    - TODO: type-ignore comments (`# (type|pyright|pyrefly|ty): ignore`)
    - TODO: overloads
 7. TODO: Inline type aliases where used in annotations (so we can determine the `Any`-ness)
