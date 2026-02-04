@@ -347,14 +347,22 @@ class _ExportsVisitor(GatherExportsVisitor, cst.BatchableCSTVisitor):
         return super().visit_Assign(node)
 
 
+class _ImportsVisitor(GatherImportsVisitor, cst.BatchableCSTVisitor):
+    @override
+    def get_visitors(self) -> Mapping[str, types.MethodType]:
+        return {
+            "visit_Import": self.visit_Import,
+            "visit_ImportFrom": self.visit_ImportFrom,
+        }
+
+
 def collect_global_symbols(source: str, /) -> ModuleSymbols:
     module = cst.parse_module(source)
     wrapper = MetadataWrapper(module)
     symbol_visitor = _SymbolVisitor(wrapper.module)
     exports_visitor = _ExportsVisitor(CodemodContext())
-    imports_visitor = GatherImportsVisitor(CodemodContext())
-    wrapper.visit_batched([symbol_visitor, exports_visitor])
-    wrapper.module.visit(imports_visitor)
+    imports_visitor = _ImportsVisitor(CodemodContext())
+    wrapper.visit_batched([symbol_visitor, exports_visitor, imports_visitor])
 
     import_mappings: dict[str, str] = {
         module: module for module in imports_visitor.module_imports
