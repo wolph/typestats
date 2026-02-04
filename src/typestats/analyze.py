@@ -2,7 +2,7 @@ import re
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING, Final, override
+from typing import TYPE_CHECKING, Final, Literal, Self, override
 
 import libcst as cst
 import mainpy
@@ -53,8 +53,12 @@ class _TypeMarker(StrEnum):
         return self.value
 
 
-UNKNOWN: Final[_TypeMarker] = _TypeMarker.UNKNOWN
-KNOWN: Final[_TypeMarker] = _TypeMarker.KNOWN
+type _UnknownType = Literal[_TypeMarker.UNKNOWN]
+type _KnownType = Literal[_TypeMarker.KNOWN]
+
+
+UNKNOWN: Final[_UnknownType] = _TypeMarker.UNKNOWN
+KNOWN: Final[_KnownType] = _TypeMarker.KNOWN
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +68,10 @@ class Expr:
     @override
     def __str__(self) -> str:
         return _EMPTY_MODULE.code_for_node(self.expr).strip()
+
+    @classmethod
+    def from_annotation(cls, annotation: cst.Annotation | None) -> Self | _UnknownType:
+        return cls(annotation.annotation) if annotation else UNKNOWN
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,6 +202,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
     module: Final[cst.Module]
     symbols: Final[list[Symbol]]
     type_aliases: Final[list[TypeAlias]]
+
     _class_stack: Final[deque[str]]
     _function_depth: int
     _overload_map: defaultdict[str, list[Overload]]
@@ -247,8 +256,8 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         return name.rsplit(".", 1)[-1]
 
     @classmethod
-    def _is_typealias_annotation(cls, annotation: cst.BaseExpression) -> bool:
-        full_name = get_full_name_for_node(annotation)
+    def _is_typealias_annotation(cls, annotation: cst.Annotation) -> bool:
+        full_name = get_full_name_for_node(annotation.annotation)
         return full_name is not None and cls._leaf_name(full_name) == "TypeAlias"
 
     @classmethod
@@ -298,16 +307,10 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         kind: ParamKind,
         known_name: str | None = None,
     ) -> Param:
-        if (
-            known_name is not None
-            and param.name.value == known_name
-            and not param.annotation
-        ):
+        if known_name and not param.annotation and param.name.value == known_name:
             annotation = KNOWN
         else:
-            annotation = (
-                Expr(param.annotation.annotation) if param.annotation else UNKNOWN
-            )
+            annotation = Expr.from_annotation(param.annotation)
         return Param(param.name.value, kind, annotation)
 
     def _add(self, name_node: cst.Name, annotation: TypeForm) -> None:
@@ -335,10 +338,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
                 if isinstance(param, cst.Param)
             )
 
-        return Overload(
-            tuple(params),
-            Expr(node.returns.annotation) if node.returns else UNKNOWN,
-        )
+        return Overload(tuple(params), Expr.from_annotation(node.returns))
 
     @override
     def visit_ClassDef(self, node: cst.ClassDef) -> bool:
@@ -348,8 +348,8 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         class_name = self._class_display_name(node)
         if _is_public(self._leaf_name(class_name)):
             self.symbols.append(Symbol(class_name, Class(class_name)))
-
         self._class_stack.append(class_name)
+
         return True
 
     @override
@@ -378,10 +378,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
                         self._callable_signature(node, known_name),
                     )
                 elif "property" in decorators or "cached_property" in decorators:
-                    self._add(
-                        node.name,
-                        Expr(node.returns.annotation) if node.returns else UNKNOWN,
-                    )
+                    self._add(node.name, Expr.from_annotation(node.returns))
                 else:
                     if overload_list := self._overload_map.pop(name, None):
                         overloads = overload_list[0], *overload_list[1:]
@@ -413,9 +410,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         if self._function_depth != 0:
             return
 
-        if node.value is not None and self._is_typealias_annotation(
-            node.annotation.annotation,
-        ):
+        if node.value is not None and self._is_typealias_annotation(node.annotation):
             for name_node in _extract_names(node.target):
                 self._add_type_alias(name_node, node.value)
             return
@@ -540,12 +535,8 @@ class _TypeIgnoreVisitor(cst.BatchableCSTVisitor):
         for match in matches:
             rules = match.group(2)
             if rules is not None:
-                rules = frozenset(
-                    rule.strip() for rule in rules.split(",") if rule.strip()
-                )
-            self.comments.append(
-                IgnoreComment(kind=match.group(1), rules=rules),
-            )
+                rules = frozenset(r.strip() for r in rules.split(",") if r.strip())
+            self.comments.append(IgnoreComment(match.group(1), rules))
 
 
 def collect_global_symbols(source: str, /) -> ModuleSymbols:
