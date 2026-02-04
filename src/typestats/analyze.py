@@ -2,7 +2,7 @@ import re
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING, Final, override
+from typing import TYPE_CHECKING, Final, Literal, Self, override
 
 import libcst as cst
 import mainpy
@@ -17,7 +17,6 @@ if TYPE_CHECKING:
 
 __all__ = (
     "IgnoreComment",
-    "Imports",
     "ModuleSymbols",
     "Symbol",
     "TypeAlias",
@@ -54,8 +53,12 @@ class _TypeMarker(StrEnum):
         return self.value
 
 
-UNKNOWN: Final[_TypeMarker] = _TypeMarker.UNKNOWN
-KNOWN: Final[_TypeMarker] = _TypeMarker.KNOWN
+type _UnknownType = Literal[_TypeMarker.UNKNOWN]
+type _KnownType = Literal[_TypeMarker.KNOWN]
+
+
+UNKNOWN: Final[_UnknownType] = _TypeMarker.UNKNOWN
+KNOWN: Final[_KnownType] = _TypeMarker.KNOWN
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +68,10 @@ class Expr:
     @override
     def __str__(self) -> str:
         return _EMPTY_MODULE.code_for_node(self.expr).strip()
+
+    @classmethod
+    def from_annotation(cls, annotation: cst.Annotation | None) -> Self | _UnknownType:
+        return cls(annotation.annotation) if annotation else UNKNOWN
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,7 +90,7 @@ class Param:
 
 @dataclass(frozen=True, slots=True)
 class Overload:
-    params: list[Param]
+    params: tuple[Param, ...]
     returns: TypeForm
 
     @override
@@ -119,7 +126,7 @@ class Class:
         return f"type[{self.name}]"
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class Symbol:
     name: str
     type_: TypeForm
@@ -129,7 +136,7 @@ class Symbol:
         return f"{self.name}: {self.type_}"
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class TypeAlias:
     name: str
     value: TypeForm
@@ -137,15 +144,6 @@ class TypeAlias:
     @override
     def __str__(self) -> str:
         return f"type {self.name} = {self.value}"
-
-
-@dataclass(slots=True)
-class Imports:
-    imports: dict[str, str]
-
-    @override
-    def __str__(self) -> str:
-        return str(self.imports)
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,14 +158,14 @@ class IgnoreComment:
         return f"{self.kind}: ignore[{', '.join(sorted(self.rules))}]"
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class ModuleSymbols:
-    imports: Imports
+    imports: tuple[tuple[str, str], ...]
     exports_explicit: frozenset[str] | None  # __all__
     exports_implicit: frozenset[str]  # [from _ ]import $name as $name
-    symbols: list[Symbol]
-    type_aliases: list[TypeAlias]
-    ignore_comments: list[IgnoreComment]
+    symbols: tuple[Symbol, ...]
+    type_aliases: tuple[TypeAlias, ...]
+    ignore_comments: tuple[IgnoreComment, ...]
 
 
 def _is_public(name: str) -> bool:
@@ -204,6 +202,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
     module: Final[cst.Module]
     symbols: Final[list[Symbol]]
     type_aliases: Final[list[TypeAlias]]
+
     _class_stack: Final[deque[str]]
     _function_depth: int
     _overload_map: defaultdict[str, list[Overload]]
@@ -257,8 +256,8 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         return name.rsplit(".", 1)[-1]
 
     @classmethod
-    def _is_typealias_annotation(cls, annotation: cst.BaseExpression) -> bool:
-        full_name = get_full_name_for_node(annotation)
+    def _is_typealias_annotation(cls, annotation: cst.Annotation) -> bool:
+        full_name = get_full_name_for_node(annotation.annotation)
         return full_name is not None and cls._leaf_name(full_name) == "TypeAlias"
 
     @classmethod
@@ -308,16 +307,10 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         kind: ParamKind,
         known_name: str | None = None,
     ) -> Param:
-        if (
-            known_name is not None
-            and param.name.value == known_name
-            and not param.annotation
-        ):
+        if known_name and not param.annotation and param.name.value == known_name:
             annotation = KNOWN
         else:
-            annotation = (
-                Expr(param.annotation.annotation) if param.annotation else UNKNOWN
-            )
+            annotation = Expr.from_annotation(param.annotation)
         return Param(param.name.value, kind, annotation)
 
     def _add(self, name_node: cst.Name, annotation: TypeForm) -> None:
@@ -336,23 +329,16 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
             (node.params.posonly_params, ParamKind.POSITIONAL_ONLY),
             (node.params.params, ParamKind.POSITIONAL_OR_KEYWORD),
             (node.params.kwonly_params, ParamKind.KEYWORD_ONLY),
+            ((node.params.star_arg,), ParamKind.VAR_POSITIONAL),
+            ((node.params.star_kwarg,), ParamKind.VAR_KEYWORD),
         ]:
-            params.extend(cls._param(param, kind, known_name) for param in node_params)
-
-        star_arg = node.params.star_arg
-        if isinstance(star_arg, cst.Param):
-            params.append(
-                cls._param(star_arg, ParamKind.VAR_POSITIONAL, known_name),
+            params.extend(
+                cls._param(param, kind, known_name)
+                for param in node_params
+                if isinstance(param, cst.Param)
             )
 
-        star_kwarg = node.params.star_kwarg
-        if isinstance(star_kwarg, cst.Param):
-            params.append(cls._param(star_kwarg, ParamKind.VAR_KEYWORD, known_name))
-
-        return Overload(
-            params,
-            Expr(node.returns.annotation) if node.returns else UNKNOWN,
-        )
+        return Overload(tuple(params), Expr.from_annotation(node.returns))
 
     @override
     def visit_ClassDef(self, node: cst.ClassDef) -> bool:
@@ -362,8 +348,8 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         class_name = self._class_display_name(node)
         if _is_public(self._leaf_name(class_name)):
             self.symbols.append(Symbol(class_name, Class(class_name)))
-
         self._class_stack.append(class_name)
+
         return True
 
     @override
@@ -392,10 +378,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
                         self._callable_signature(node, known_name),
                     )
                 elif "property" in decorators or "cached_property" in decorators:
-                    self._add(
-                        node.name,
-                        Expr(node.returns.annotation) if node.returns else UNKNOWN,
-                    )
+                    self._add(node.name, Expr.from_annotation(node.returns))
                 else:
                     if overload_list := self._overload_map.pop(name, None):
                         overloads = overload_list[0], *overload_list[1:]
@@ -427,9 +410,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         if self._function_depth != 0:
             return
 
-        if node.value is not None and self._is_typealias_annotation(
-            node.annotation.annotation,
-        ):
+        if node.value is not None and self._is_typealias_annotation(node.annotation):
             for name_node in _extract_names(node.target):
                 self._add_type_alias(name_node, node.value)
             return
@@ -554,12 +535,8 @@ class _TypeIgnoreVisitor(cst.BatchableCSTVisitor):
         for match in matches:
             rules = match.group(2)
             if rules is not None:
-                rules = frozenset(
-                    rule.strip() for rule in rules.split(",") if rule.strip()
-                )
-            self.comments.append(
-                IgnoreComment(kind=match.group(1), rules=rules),
-            )
+                rules = frozenset(r.strip() for r in rules.split(",") if r.strip())
+            self.comments.append(IgnoreComment(match.group(1), rules))
 
 
 def collect_global_symbols(source: str, /) -> ModuleSymbols:
@@ -573,16 +550,16 @@ def collect_global_symbols(source: str, /) -> ModuleSymbols:
         [symbol_visitor, exports_visitor, imports_visitor, type_ignore_visitor],
     )
 
-    import_mappings: dict[str, str] = {
+    imports: dict[str, str] = {
         module: module for module in imports_visitor.module_imports
     }
-    import_mappings.update(imports_visitor.module_aliases)
-    import_mappings.update({
+    imports.update(imports_visitor.module_aliases)
+    imports.update({
         f"{module}.{obj}": obj
         for module, objects in imports_visitor.object_mapping.items()
         for obj in objects
     })
-    import_mappings.update({
+    imports.update({
         f"{module}.{obj}": alias
         for module, aliases in imports_visitor.alias_mapping.items()
         for obj, alias in aliases
@@ -593,15 +570,14 @@ def collect_global_symbols(source: str, /) -> ModuleSymbols:
         for name, alias in aliases
         if name == alias
     )
-    imports = Imports(imports=import_mappings)
 
     return ModuleSymbols(
-        symbols=symbol_visitor.symbols,
-        type_aliases=symbol_visitor.type_aliases,
+        symbols=tuple(symbol_visitor.symbols),
+        type_aliases=tuple(symbol_visitor.type_aliases),
         exports_explicit=exports_visitor.exports_explicit,
         exports_implicit=reexports,
-        imports=imports,
-        ignore_comments=type_ignore_visitor.comments,
+        imports=tuple(imports.items()),
+        ignore_comments=tuple(type_ignore_visitor.comments),
     )
 
 
