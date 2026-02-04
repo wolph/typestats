@@ -17,7 +17,6 @@ if TYPE_CHECKING:
 
 __all__ = (
     "IgnoreComment",
-    "Imports",
     "ModuleSymbols",
     "Symbol",
     "TypeAlias",
@@ -83,7 +82,7 @@ class Param:
 
 @dataclass(frozen=True, slots=True)
 class Overload:
-    params: list[Param]
+    params: tuple[Param, ...]
     returns: TypeForm
 
     @override
@@ -140,15 +139,6 @@ class TypeAlias:
 
 
 @dataclass(frozen=True, slots=True)
-class Imports:
-    imports: dict[str, str]
-
-    @override
-    def __str__(self) -> str:
-        return str(self.imports)
-
-
-@dataclass(frozen=True, slots=True)
 class IgnoreComment:
     kind: str  # e.g., "type", "pyright", "pyrefly", "ty", etc
     rules: frozenset[str] | None
@@ -162,12 +152,12 @@ class IgnoreComment:
 
 @dataclass(frozen=True, slots=True)
 class ModuleSymbols:
-    imports: Imports
+    imports: tuple[tuple[str, str], ...]
     exports_explicit: frozenset[str] | None  # __all__
     exports_implicit: frozenset[str]  # [from _ ]import $name as $name
-    symbols: list[Symbol]
-    type_aliases: list[TypeAlias]
-    ignore_comments: list[IgnoreComment]
+    symbols: tuple[Symbol, ...]
+    type_aliases: tuple[TypeAlias, ...]
+    ignore_comments: tuple[IgnoreComment, ...]
 
 
 def _is_public(name: str) -> bool:
@@ -336,21 +326,17 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
             (node.params.posonly_params, ParamKind.POSITIONAL_ONLY),
             (node.params.params, ParamKind.POSITIONAL_OR_KEYWORD),
             (node.params.kwonly_params, ParamKind.KEYWORD_ONLY),
+            ((node.params.star_arg,), ParamKind.VAR_POSITIONAL),
+            ((node.params.star_kwarg,), ParamKind.VAR_KEYWORD),
         ]:
-            params.extend(cls._param(param, kind, known_name) for param in node_params)
-
-        star_arg = node.params.star_arg
-        if isinstance(star_arg, cst.Param):
-            params.append(
-                cls._param(star_arg, ParamKind.VAR_POSITIONAL, known_name),
+            params.extend(
+                cls._param(param, kind, known_name)
+                for param in node_params
+                if isinstance(param, cst.Param)
             )
 
-        star_kwarg = node.params.star_kwarg
-        if isinstance(star_kwarg, cst.Param):
-            params.append(cls._param(star_kwarg, ParamKind.VAR_KEYWORD, known_name))
-
         return Overload(
-            params,
+            tuple(params),
             Expr(node.returns.annotation) if node.returns else UNKNOWN,
         )
 
@@ -573,16 +559,16 @@ def collect_global_symbols(source: str, /) -> ModuleSymbols:
         [symbol_visitor, exports_visitor, imports_visitor, type_ignore_visitor],
     )
 
-    import_mappings: dict[str, str] = {
+    imports: dict[str, str] = {
         module: module for module in imports_visitor.module_imports
     }
-    import_mappings.update(imports_visitor.module_aliases)
-    import_mappings.update({
+    imports.update(imports_visitor.module_aliases)
+    imports.update({
         f"{module}.{obj}": obj
         for module, objects in imports_visitor.object_mapping.items()
         for obj in objects
     })
-    import_mappings.update({
+    imports.update({
         f"{module}.{obj}": alias
         for module, aliases in imports_visitor.alias_mapping.items()
         for obj, alias in aliases
@@ -593,15 +579,14 @@ def collect_global_symbols(source: str, /) -> ModuleSymbols:
         for name, alias in aliases
         if name == alias
     )
-    imports = Imports(imports=import_mappings)
 
     return ModuleSymbols(
-        symbols=symbol_visitor.symbols,
-        type_aliases=symbol_visitor.type_aliases,
+        symbols=tuple(symbol_visitor.symbols),
+        type_aliases=tuple(symbol_visitor.type_aliases),
         exports_explicit=exports_visitor.exports_explicit,
         exports_implicit=reexports,
-        imports=imports,
-        ignore_comments=type_ignore_visitor.comments,
+        imports=tuple(imports.items()),
+        ignore_comments=tuple(type_ignore_visitor.comments),
     )
 
 
