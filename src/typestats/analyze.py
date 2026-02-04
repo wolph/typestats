@@ -1,3 +1,4 @@
+import re
 from collections import deque
 from dataclasses import dataclass
 from enum import StrEnum
@@ -16,6 +17,7 @@ if TYPE_CHECKING:
 
 __all__ = (
     "Annotation",
+    "IgnoreComment",
     "ModuleImports",
     "ModuleSymbols",
     "Symbol",
@@ -109,6 +111,18 @@ class ModuleImports:
         return str(self.imports)
 
 
+@dataclass(frozen=True, slots=True)
+class IgnoreComment:
+    kind: str  # e.g., "type", "pyright", "pyrefly", "ty", etc
+    rules: frozenset[str] | None
+
+    @override
+    def __str__(self) -> str:
+        if self.rules is None:
+            return f"{self.kind}: ignore"
+        return f"{self.kind}: ignore[{', '.join(sorted(self.rules))}]"
+
+
 @dataclass(slots=True)
 class ModuleSymbols:
     symbols: list[Symbol]
@@ -116,6 +130,7 @@ class ModuleSymbols:
     exports_explicit: frozenset[str] | None  # __all__
     exports_implicit: frozenset[str]  # [from _ ]import $name as $name
     imports: ModuleImports
+    ignore_comments: list[IgnoreComment]
 
 
 def _is_public(name: str) -> bool:
@@ -432,13 +447,52 @@ class _ImportsVisitor(GatherImportsVisitor, cst.BatchableCSTVisitor):
         }
 
 
+class _TypeIgnoreVisitor(cst.BatchableCSTVisitor):
+    _TYPE_IGNORE_RE: Final[re.Pattern[str]] = re.compile(
+        r"""
+        \s*\#\s*
+        ([a-z]+)\s*:\s*
+        ignore\b
+        (?:\s*\[\s*([^\]]+)\s*\])?
+        """,
+        re.VERBOSE,
+    )
+
+    comments: Final[list[IgnoreComment]]
+
+    def __init__(self) -> None:
+        self.comments = []
+
+    @override
+    def visit_TrailingWhitespace(self, node: cst.TrailingWhitespace) -> None:
+        if node.comment is None:
+            return
+
+        comment = node.comment.value
+        matches = list(self._TYPE_IGNORE_RE.finditer(comment))
+        if not matches:
+            return
+        for match in matches:
+            rules = match.group(2)
+            if rules is not None:
+                rules = frozenset(
+                    rule.strip() for rule in rules.split(",") if rule.strip()
+                )
+            self.comments.append(
+                IgnoreComment(kind=match.group(1), rules=rules),
+            )
+
+
 def collect_global_symbols(source: str, /) -> ModuleSymbols:
     module = cst.parse_module(source)
     wrapper = MetadataWrapper(module)
     symbol_visitor = _SymbolVisitor(wrapper.module)
     exports_visitor = _ExportsVisitor(CodemodContext())
     imports_visitor = _ImportsVisitor(CodemodContext())
-    wrapper.visit_batched([symbol_visitor, exports_visitor, imports_visitor])
+    type_ignore_visitor = _TypeIgnoreVisitor()
+    wrapper.visit_batched(
+        [symbol_visitor, exports_visitor, imports_visitor, type_ignore_visitor],
+    )
 
     import_mappings: dict[str, str] = {
         module: module for module in imports_visitor.module_imports
@@ -468,6 +522,7 @@ def collect_global_symbols(source: str, /) -> ModuleSymbols:
         exports_explicit=exports_visitor.exports_explicit,
         exports_implicit=reexports,
         imports=imports,
+        ignore_comments=type_ignore_visitor.comments,
     )
 
 
@@ -492,7 +547,7 @@ def func(a: int, *args, **kwds) -> str:
         return c * 2
     return str(nested(a) + nested(b))
 
-class MyClass[T]:
+class MyClass[T]:  # type: ignore[misc,deprecated]  # ty:ignore[deprecated]
     attr: T
 
     def method(self, x: int, y) -> str:
@@ -506,9 +561,13 @@ class MyClass[T]:
     print("Exports (implicit):", module_symbols.exports_implicit)  # noqa: T201
 
     print()  # noqa: T201
-    for symbol in module_symbols.type_aliases:
-        print(f"{symbol.name} = {symbol.type_}")  # noqa: T201
+    for alias in module_symbols.type_aliases:
+        print(f"{alias.name} = {alias.type_}")  # noqa: T201
 
     print()  # noqa: T201
     for symbol in module_symbols.symbols:
-        print(f"{symbol.name}: {symbol.type_}")  # noqa: T201
+        print(symbol)  # noqa: T201
+
+    print()  # noqa: T201
+    for comment in module_symbols.ignore_comments:
+        print(comment)  # noqa: T201
