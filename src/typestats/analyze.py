@@ -26,7 +26,7 @@ __all__ = (
 
 _EMPTY_MODULE: Final[cst.Module] = cst.Module([])
 
-type TypeForm = Unknown | Known | Expr | Function | Class
+type TypeForm = _TypeMarker | Expr | Function | Class
 
 
 class ParamKind(StrEnum):
@@ -37,25 +37,24 @@ class ParamKind(StrEnum):
     KEYWORD_ONLY = "keyword-only"
     VAR_KEYWORD = "variadic keyword"
 
+    def prefix(self) -> str:
+        return {
+            ParamKind.VAR_POSITIONAL: "*",
+            ParamKind.VAR_KEYWORD: "**",
+        }.get(self, "")
 
-@dataclass(frozen=True, slots=True)
-class Unknown:
+
+class _TypeMarker(StrEnum):
+    KNOWN = ""  # for `self` and `cls` parameters
+    UNKNOWN = "?"  # for other missing annotations
+
     @override
     def __str__(self) -> str:
-        return "?"
+        return self.value
 
 
-UNKNOWN: Final[Unknown] = Unknown()
-
-
-@dataclass(frozen=True, slots=True)
-class Known:
-    @override
-    def __str__(self) -> str:
-        return "_"
-
-
-KNOWN: Final[Known] = Known()
+UNKNOWN: Final[_TypeMarker] = _TypeMarker.UNKNOWN
+KNOWN: Final[_TypeMarker] = _TypeMarker.KNOWN
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,13 +74,10 @@ class Param:
 
     @override
     def __str__(self) -> str:
-        prefix = {
-            ParamKind.VAR_POSITIONAL: "*",
-            ParamKind.VAR_KEYWORD: "**",
-        }.get(self.kind, "")
-        if isinstance(self.annotation, Known):
-            return f"{prefix}{self.name}"
-        return f"{prefix}{self.name}: {self.annotation}"
+        out = f"{self.kind.prefix()}{self.name}"
+        if self.annotation is not KNOWN:
+            out = f"{out}: {self.annotation}"
+        return out
 
 
 @dataclass(frozen=True, slots=True)
