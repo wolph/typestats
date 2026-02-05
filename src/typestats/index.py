@@ -1,3 +1,4 @@
+import enum
 import graphlib
 import logging
 import os
@@ -66,6 +67,35 @@ def sources_root(sources: Iterable[StrPath], /) -> anyio.Path:
     This is determined by finding the common ancestor of all source files.
     """
     return anyio.Path(os.path.commonpath(sources))
+
+
+class PyTyped(enum.Enum):
+    NO = enum.auto()
+    YES = enum.auto()
+    PARTIAL = enum.auto()
+    STUBS = enum.auto()
+
+
+async def get_py_typed(project_dir: StrPath, /) -> PyTyped:
+    """
+    Determine the `py.typed` status of the given project directory.
+    """
+    sources = await list_sources(project_dir)
+    root = sources_root(sources)
+
+    if root.parent.name.endswith("-stubs"):
+        return PyTyped.STUBS
+
+    py_typed = root / "py.typed"
+    if not await py_typed.exists():
+        return PyTyped.NO
+
+    # https://typing.python.org/en/latest/spec/distributing.html#partial-stub-packages
+    contents = await py_typed.read_text()
+    if contents and "partial\n" in contents:
+        return PyTyped.PARTIAL
+
+    return PyTyped.YES
 
 
 def sources_to_module_paths(
