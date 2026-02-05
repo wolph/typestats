@@ -55,6 +55,8 @@ def test_exports_explicit_missing() -> None:
 
 def test_type_aliases() -> None:
     src = textwrap.dedent("""
+    from typing import TypeAlias, TypeAliasType
+
     A: TypeAlias = str
     B = TypeAliasType("B", str)
     type C = str
@@ -67,6 +69,25 @@ def test_type_aliases() -> None:
     assert type_aliases[0].name == "A"
     assert type_aliases[1].name == "B"
     assert type_aliases[2].name == "C"
+
+
+def test_type_alias_indirect() -> None:
+    src = textwrap.dedent("""
+    import typing as t
+    from typing import TypeAlias as Alias
+    from typing_extensions import TypeAliasType as AliasType
+
+    A1: t.TypeAlias = str
+    A2: Alias = str
+
+    B1 = t.TypeAliasType("B1", str)
+    B2 = AliasType("B2", str)
+    """)
+    type_aliases = collect_symbols(src).type_aliases
+    assert type_aliases[0].name == "A1"
+    assert type_aliases[1].name == "A2"
+    assert type_aliases[2].name == "B1"
+    assert type_aliases[3].name == "B2"
 
 
 def test_symbols() -> None:
@@ -90,10 +111,38 @@ def test_symbols() -> None:
 
 def test_symbols_no_type_alias() -> None:
     src = textwrap.dedent("""
+    from typing import TypeAlias, TypeAliasType
+
     A: TypeAlias = str
     B = TypeAliasType("B", str)
     type C = str
     D = str
+    """)
+    symbols = collect_symbols(src).symbols
+    assert symbols[0].name == "D"
+    assert len(symbols) == 1
+
+
+def test_special_typeforms_ignored_aliases() -> None:
+    src = textwrap.dedent("""
+    import typing as t
+    from typing import NewType as NT
+
+    UserId = t.NewType("UserId", int)
+    Token = NT("Token", str)
+    D = 1
+    """)
+    symbols = collect_symbols(src).symbols
+    assert symbols[0].name == "D"
+    assert len(symbols) == 1
+
+
+def test_special_typeforms_ignored_annassign() -> None:
+    src = textwrap.dedent("""
+    import typing as t
+
+    T: object = t.TypeVar("T")
+    D: int = 1
     """)
     symbols = collect_symbols(src).symbols
     assert symbols[0].name == "D"
@@ -123,6 +172,22 @@ def test_annotated_unwrap() -> None:
 
     X: Annotated[int, "meta"] = 1
     A: TypeAlias = Annotated[str, "alias-meta"]
+    """)
+    module = collect_symbols(src)
+
+    assert module.symbols[0].name == "X"
+    assert str(module.symbols[0].type_) == "int"
+
+    assert module.type_aliases[0].name == "A"
+    assert str(module.type_aliases[0].value) == "str"
+
+
+def test_annotated_unwrap_indirect_import() -> None:
+    src = textwrap.dedent("""
+    import typing as t
+
+    X: t.Annotated[int, "meta"] = 1
+    A: t.TypeAlias = t.Annotated[str, "alias-meta"]
     """)
     module = collect_symbols(src)
 
