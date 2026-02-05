@@ -25,6 +25,14 @@ __all__ = (
 )
 
 _EMPTY_MODULE: Final[cst.Module] = cst.Module([])
+_ENUM_BASES: Final[frozenset[str]] = frozenset({
+    "Enum",
+    "IntEnum",
+    "StrEnum",
+    "ReprEnum",
+    "Flag",
+    "IntFlag",
+})
 
 type TypeForm = _TypeMarker | Expr | Function | Class
 
@@ -243,6 +251,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
     type_aliases: Final[list[TypeAlias]]
 
     _class_stack: Final[deque[str]]
+    _enum_class_stack: Final[deque[bool]]
     _function_depth: int
     _overload_map: defaultdict[str, list[Overload]]
     _added_functions: set[str]
@@ -252,6 +261,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         self.symbols = []
         self.type_aliases = []
         self._class_stack = deque()
+        self._enum_class_stack = deque()
         self._function_depth = 0
         self._overload_map = defaultdict(list)
         self._added_functions = set()
@@ -283,6 +293,17 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
 
     def _class_display_name(self, node: cst.ClassDef) -> str:
         return self._display_name_for(node, node.name.value)
+
+    def _is_enum_class(self, node: cst.ClassDef) -> bool:
+        for base in node.bases:
+            if (
+                full_name := (
+                    self._qualified_name(base.value)
+                    or get_full_name_for_node(base.value)
+                )
+            ) and self._leaf_name(full_name) in _ENUM_BASES:
+                return True
+        return False
 
     def _symbol_name(self, name_node: cst.Name) -> str:
         name = self._display_name(name_node)
@@ -395,6 +416,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         if _is_public(self._leaf_name(class_name)):
             self.symbols.append(Symbol(class_name, Class(class_name)))
         self._class_stack.append(class_name)
+        self._enum_class_stack.append(self._is_enum_class(node))
 
         return True
 
@@ -402,6 +424,8 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
     def leave_ClassDef(self, original_node: cst.ClassDef) -> None:
         if self._class_stack:
             self._class_stack.pop()
+        if self._enum_class_stack:
+            self._enum_class_stack.pop()
 
     @override
     def visit_FunctionDef(self, node: cst.FunctionDef) -> bool:
@@ -489,7 +513,10 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
 
         for target in node.targets:
             for name_node in _extract_names(target.target):
-                self._add(name_node, UNKNOWN)
+                if self._class_stack and self._enum_class_stack[-1]:
+                    self._add(name_node, KNOWN)
+                else:
+                    self._add(name_node, UNKNOWN)
 
     @override
     def visit_TypeAlias(self, node: cst.TypeAlias) -> None:
