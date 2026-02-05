@@ -1,7 +1,5 @@
 import textwrap
 
-import pytest
-
 from typestats.analyze import collect_global_symbols
 
 
@@ -21,7 +19,6 @@ def test_imports() -> None:
     assert imports["b.e"] == "_e"
 
 
-@pytest.mark.skip(reason="pending implementation")
 def test_exports_implicit_direct() -> None:
     src = textwrap.dedent("""
     import a

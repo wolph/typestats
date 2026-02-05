@@ -565,10 +565,19 @@ def collect_global_symbols(source: str, /) -> ModuleSymbols:
         for obj, alias in aliases
     })
     reexports = frozenset(
-        name
-        for aliases in imports_visitor.alias_mapping.values()
-        for name, alias in aliases
-        if name == alias
+        [
+            *(
+                name
+                for aliases in imports_visitor.alias_mapping.values()
+                for name, alias in aliases
+                if name == alias
+            ),
+            *(
+                module
+                for module, alias in imports_visitor.module_aliases.items()
+                if module == alias
+            ),
+        ],
     )
 
     return ModuleSymbols(
