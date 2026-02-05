@@ -1,5 +1,5 @@
 [build-system]
-requires = ["uv_build>=0.9.28,<0.10"]
+requires = ["uv_build>=0.10,<0.11"]
 build-backend = "uv_build"
 
 [project]
@@ -36,7 +36,7 @@ typestats = "typestats:__main__.app"
 [dependency-groups]
 dev = [
   "dprint-py>=0.51.1.0",
-  "pyrefly>=0.51.0",
+  "pyrefly>=0.51.1",
   "ruff>=0.15.0",
   "pytest>=9.0.2",
 ]
