@@ -115,3 +115,19 @@ def test_ignore_comments() -> None:
 
     assert ignore_comments[2].kind == "pyrefly"
     assert ignore_comments[2].rules is None
+
+
+def test_annotated_unwrap() -> None:
+    src = textwrap.dedent("""
+    from typing import Annotated, TypeAlias
+
+    X: Annotated[int, "meta"] = 1
+    A: TypeAlias = Annotated[str, "alias-meta"]
+    """)
+    module = collect_symbols(src)
+
+    assert module.symbols[0].name == "X"
+    assert str(module.symbols[0].type_) == "int"
+
+    assert module.type_aliases[0].name == "A"
+    assert str(module.type_aliases[0].value) == "str"

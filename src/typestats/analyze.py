@@ -71,7 +71,11 @@ class Expr:
 
     @classmethod
     def from_annotation(cls, annotation: cst.Annotation | None) -> Self | _UnknownType:
-        return cls(annotation.annotation) if annotation else UNKNOWN
+        return cls.from_expr(annotation.annotation) if annotation else UNKNOWN
+
+    @classmethod
+    def from_expr(cls, expr: cst.BaseExpression) -> Self:
+        return cls(_unwrap_annotated(expr))
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,6 +188,24 @@ def _extract_names(expr: cst.BaseExpression) -> list[cst.Name]:
             return names
         case _:
             return []
+
+
+def _unwrap_annotated(expr: cst.BaseExpression) -> cst.BaseExpression:
+    current = expr
+    while isinstance(current, cst.Subscript):
+        full_name = get_full_name_for_node(current.value)
+        if full_name is None or full_name.rsplit(".", 1)[-1] != "Annotated":
+            break
+
+        if not current.slice:
+            break
+
+        first = current.slice[0].slice
+        if not isinstance(first, cst.Index):
+            break
+
+        current = first.value
+    return current
 
 
 class _SymbolVisitor(cst.BatchableCSTVisitor):
@@ -299,7 +321,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
             name = f"{self._class_stack[-1]}.{name}"
 
         if _is_public(self._leaf_name(name)):
-            self.type_aliases.append(TypeAlias(name, Expr(value)))
+            self.type_aliases.append(TypeAlias(name, Expr.from_expr(value)))
 
     @staticmethod
     def _param(
@@ -419,7 +441,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
             return
 
         for name_node in _extract_names(node.target):
-            self._add(name_node, Expr(node.annotation.annotation))
+            self._add(name_node, Expr.from_expr(node.annotation.annotation))
 
     @override
     def visit_Assign(self, node: cst.Assign) -> None:
