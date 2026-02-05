@@ -57,6 +57,11 @@ strict = true
 [tool.pyrefly]
 enabled-ignores = ["pyrefly"]
 
+[tool.pyrefly.errors]
+implicit-any = "error"
+unannotated-parameter = "error"
+unannotated-return = "error"
+
 # (based)pyright
 
 [tool.pyright]
