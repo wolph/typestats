@@ -1,6 +1,6 @@
 import textwrap
 
-from typestats.analyze import collect_symbols
+from typestats.analyze import KNOWN, collect_symbols
 
 
 def test_imports() -> None:
@@ -196,3 +196,31 @@ def test_annotated_unwrap_indirect_import() -> None:
 
     assert module.type_aliases[0].name == "A"
     assert str(module.type_aliases[0].value) == "str"
+
+
+def test_enum_members_are_known() -> None:
+    src = textwrap.dedent("""
+    from enum import Enum
+
+    class Color(Enum):
+        RED = 1
+        BLUE = 2
+    """)
+    module = collect_symbols(src)
+    symbols = {symbol.name: symbol.type_ for symbol in module.symbols}
+
+    assert symbols["Color.RED"] is KNOWN
+    assert symbols["Color.BLUE"] is KNOWN
+
+
+def test_enum_members_are_known_with_alias() -> None:
+    src = textwrap.dedent("""
+    from enum import Enum as MyEnum
+
+    class Status(MyEnum):
+        READY = 1
+    """)
+    module = collect_symbols(src)
+    symbols = {symbol.name: symbol.type_ for symbol in module.symbols}
+
+    assert symbols["Status.READY"] is KNOWN
