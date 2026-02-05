@@ -6,6 +6,7 @@ from typestats.analyze import collect_global_symbols
 def test_imports() -> None:
     src = textwrap.dedent("""
     import a
+    import a as _a
     import a.b
     import a.c as _c
     from b import d
@@ -13,10 +14,11 @@ def test_imports() -> None:
     """)
     imports = dict(collect_global_symbols(src).imports)
     assert imports["a"] == "a"
+    assert imports["_a"] == "a"
     assert imports["a.b"] == "a.b"
-    assert imports["a.c"] == "_c"
-    assert imports["b.d"] == "d"
-    assert imports["b.e"] == "_e"
+    assert imports["_c"] == "a.c"
+    assert imports["d"] == "b.d"
+    assert imports["_e"] == "b.e"
 
 
 def test_exports_implicit_direct() -> None:

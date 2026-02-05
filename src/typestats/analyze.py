@@ -550,34 +550,30 @@ def collect_global_symbols(source: str, /) -> ModuleSymbols:
         [symbol_visitor, exports_visitor, imports_visitor, type_ignore_visitor],
     )
 
-    imports: dict[str, str] = {
-        module: module for module in imports_visitor.module_imports
-    }
-    imports.update(imports_visitor.module_aliases)
-    imports.update({
-        f"{module}.{obj}": obj
-        for module, objects in imports_visitor.object_mapping.items()
-        for obj in objects
-    })
-    imports.update({
-        f"{module}.{obj}": alias
-        for module, aliases in imports_visitor.alias_mapping.items()
-        for obj, alias in aliases
-    })
+    imports = (
+        {module: module for module in imports_visitor.module_imports}
+        | {alias: module for module, alias in imports_visitor.module_aliases.items()}
+        | {
+            obj: f"{module}.{obj}"
+            for module, objects in imports_visitor.object_mapping.items()
+            for obj in objects
+        }
+        | {
+            alias: f"{module}.{obj}"
+            for module, aliases in imports_visitor.alias_mapping.items()
+            for obj, alias in aliases
+        }
+    )
+
     reexports = frozenset(
-        [
-            *(
-                name
-                for aliases in imports_visitor.alias_mapping.values()
-                for name, alias in aliases
-                if name == alias
-            ),
-            *(
-                module
-                for module, alias in imports_visitor.module_aliases.items()
-                if module == alias
-            ),
-        ],
+        name
+        for aliases in imports_visitor.alias_mapping.values()
+        for name, alias in aliases
+        if name == alias
+    ) | frozenset(
+        module
+        for module, alias in imports_visitor.module_aliases.items()
+        if module == alias
     )
 
     return ModuleSymbols(
