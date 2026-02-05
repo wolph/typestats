@@ -21,7 +21,7 @@ __all__ = (
     "Symbol",
     "TypeAlias",
     "TypeForm",
-    "collect_global_symbols",
+    "collect_symbols",
 )
 
 _EMPTY_MODULE: Final[cst.Module] = cst.Module([])
@@ -539,7 +539,7 @@ class _TypeIgnoreVisitor(cst.BatchableCSTVisitor):
             self.comments.append(IgnoreComment(match.group(1), rules))
 
 
-def collect_global_symbols(source: str, /) -> ModuleSymbols:
+def collect_symbols(source: str, /) -> ModuleSymbols:
     module = cst.parse_module(source)
     wrapper = MetadataWrapper(module)
     symbol_visitor = _SymbolVisitor(wrapper.module)
@@ -626,7 +626,7 @@ class MyClass[T]:  # type: ignore[misc,deprecated]  # ty:ignore[deprecated]
     def class_method(cls) -> None:
         pass
 """
-    module_symbols = collect_global_symbols(src)
+    module_symbols = collect_symbols(src)
     print("Imports:", module_symbols.imports)  # noqa: T201
     print("Exports (explicit):", module_symbols.exports_explicit)  # noqa: T201
     print("Exports (implicit):", module_symbols.exports_implicit)  # noqa: T201

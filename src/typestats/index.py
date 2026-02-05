@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 import anyio
 import mainpy
 
-from typestats import _ruff
+from typestats import _ruff, analyze
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from _typeshed import StrPath
 
 
-__all__ = ("list_sources",)
+__all__ = ("collect_module_symbols", "list_sources")
 
 
 _logger = logging.getLogger(__name__)
@@ -140,6 +140,26 @@ def sources_to_module_paths(
     return {k: frozenset(ps) for k, ps in module_paths.items()}
 
 
+async def collect_module_symbols(
+    project_dir: StrPath,
+    /,
+) -> Mapping[str, Mapping[anyio.Path, analyze.ModuleSymbols]]:
+    """Collect the symbols defined in each module of the given project directory."""
+    sources = list(await list_sources(project_dir))
+    module_paths = sources_to_module_paths(sources)
+
+    symbols: dict[str, dict[anyio.Path, analyze.ModuleSymbols]] = {}
+
+    for module_path, paths in module_paths.items():
+        symbols[module_path] = {}
+        for src_path in paths:
+            src = await src_path.read_text()
+            src_symbols = analyze.collect_symbols(src)
+            symbols[module_path][src_path] = src_symbols
+
+    return symbols
+
+
 @mainpy.main
 async def example() -> None:
     import httpx  # noqa: PLC0415
@@ -156,6 +176,9 @@ async def example() -> None:
             assert py_min, req
             ruff_analyze_opts.extend(["--python-version", req])
 
-        sources = list(await list_sources(path))
-        root = sources_root(sources)
-        print(*[s.relative_to(root.parent) for s in sources], sep="\n")  # noqa: T201
+        module_symbols = await collect_module_symbols(path)
+        for module_path, entries in sorted(module_symbols.items()):
+            for source_path, symbols in entries.items():
+                rel_path = source_path.relative_to(path)
+                symbol_count = len(symbols.symbols) + len(symbols.type_aliases)
+                print(f"{module_path} -> {rel_path} ({symbol_count} symbols)")  # noqa: T201

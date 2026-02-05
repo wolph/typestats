@@ -1,6 +1,6 @@
 import textwrap
 
-from typestats.analyze import collect_global_symbols
+from typestats.analyze import collect_symbols
 
 
 def test_imports() -> None:
@@ -12,7 +12,7 @@ def test_imports() -> None:
     from b import d
     from b import e as _e
     """)
-    imports = dict(collect_global_symbols(src).imports)
+    imports = dict(collect_symbols(src).imports)
     assert imports["a"] == "a"
     assert imports["_a"] == "a"
     assert imports["a.b"] == "a.b"
@@ -27,7 +27,7 @@ def test_exports_implicit_direct() -> None:
     import b as _b
     import c as c
     """)
-    exports = collect_global_symbols(src).exports_implicit
+    exports = collect_symbols(src).exports_implicit
     assert exports == {"c"}
 
 
@@ -37,19 +37,19 @@ def test_exports_implicit_from() -> None:
     from m import b as _b
     from m import c as c
     """)
-    exports = collect_global_symbols(src).exports_implicit
+    exports = collect_symbols(src).exports_implicit
     assert exports == {"c"}
 
 
 def test_exports_explicit() -> None:
     src = """__all__ = ["a", "b", "c"]"""
-    exports = collect_global_symbols(src).exports_explicit
+    exports = collect_symbols(src).exports_explicit
     assert exports == {"a", "b", "c"}
 
 
 def test_exports_explicit_missing() -> None:
     src = """a = 1"""
-    exports = collect_global_symbols(src).exports_explicit
+    exports = collect_symbols(src).exports_explicit
     assert exports is None
 
 
@@ -63,7 +63,7 @@ def test_type_aliases() -> None:
     class E: ...
     def f() -> None: ...
     """)
-    type_aliases = collect_global_symbols(src).type_aliases
+    type_aliases = collect_symbols(src).type_aliases
     assert type_aliases[0].name == "A"
     assert type_aliases[1].name == "B"
     assert type_aliases[2].name == "C"
@@ -81,7 +81,7 @@ def test_symbols() -> None:
     def f() -> None:
         pass
     """)
-    symbols = collect_global_symbols(src).symbols
+    symbols = collect_symbols(src).symbols
     assert symbols[0].name == "x"
     assert symbols[1].name == "A"
     assert symbols[2].name == "f"
@@ -95,7 +95,7 @@ def test_symbols_no_type_alias() -> None:
     type C = str
     D = str
     """)
-    symbols = collect_global_symbols(src).symbols
+    symbols = collect_symbols(src).symbols
     assert symbols[0].name == "D"
     assert len(symbols) == 1
 
@@ -105,7 +105,7 @@ def test_ignore_comments() -> None:
     x: int = 1  # type: ignore[misc,deprecated]  # ty:ignore[deprecated]
     y: str = "hello"  # pyrefly : ignore
     """)
-    ignore_comments = collect_global_symbols(src).ignore_comments
+    ignore_comments = collect_symbols(src).ignore_comments
 
     assert ignore_comments[0].kind == "type"
     assert ignore_comments[0].rules == {"misc", "deprecated"}
