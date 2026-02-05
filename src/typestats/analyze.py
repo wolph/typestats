@@ -1,6 +1,5 @@
 import re
 from collections import defaultdict, deque
-from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Final, Literal, Self, override
