@@ -1,5 +1,6 @@
 import graphlib
 import logging
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -9,6 +10,8 @@ import mainpy
 from typestats import _ruff
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from _typeshed import StrPath
 
 
@@ -52,6 +55,14 @@ async def list_sources(project_dir: StrPath, /) -> map[anyio.Path]:
     return map(anyio.Path, sorter.static_order())
 
 
+def sources_root(sources: Iterable[StrPath], /) -> anyio.Path:
+    """
+    Return the root directory containing source files in the given project directory.
+    This is determined by finding the common ancestor of all source files.
+    """
+    return anyio.Path(os.path.commonpath(sources))
+
+
 @mainpy.main
 async def example() -> None:
     import httpx  # noqa: PLC0415
@@ -68,4 +79,6 @@ async def example() -> None:
             assert py_min, req
             ruff_analyze_opts.extend(["--python-version", req])
 
-        print(*await list_sources(path), sep="\n")  # noqa: T201
+        sources = list(await list_sources(path))
+        root = sources_root(sources)
+        print(*[s.relative_to(root.parent) for s in sources], sep="\n")  # noqa: T201
