@@ -13,7 +13,7 @@ from libcst.metadata import MetadataWrapper, QualifiedNameProvider, QualifiedNam
 
 if TYPE_CHECKING:
     import types
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
 
 __all__ = (
     "IgnoreComment",
@@ -70,12 +70,24 @@ class Expr:
         return _EMPTY_MODULE.code_for_node(self.expr).strip()
 
     @classmethod
-    def from_annotation(cls, annotation: cst.Annotation | None) -> Self | _UnknownType:
-        return cls.from_expr(annotation.annotation) if annotation else UNKNOWN
+    def from_annotation(
+        cls,
+        annotation: cst.Annotation | None,
+        name_resolver: Callable[[cst.CSTNode], str | None] | None = None,
+    ) -> Self | _UnknownType:
+        return (
+            cls.from_expr(annotation.annotation, name_resolver)
+            if annotation
+            else UNKNOWN
+        )
 
     @classmethod
-    def from_expr(cls, expr: cst.BaseExpression) -> Self:
-        return cls(_unwrap_annotated(expr))
+    def from_expr(
+        cls,
+        expr: cst.BaseExpression,
+        name_resolver: Callable[[cst.CSTNode], str | None] | None = None,
+    ) -> Self:
+        return cls(_unwrap_annotated(expr, name_resolver))
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,10 +202,15 @@ def _extract_names(expr: cst.BaseExpression) -> list[cst.Name]:
             return []
 
 
-def _unwrap_annotated(expr: cst.BaseExpression) -> cst.BaseExpression:
+def _unwrap_annotated(
+    expr: cst.BaseExpression,
+    name_resolver: Callable[[cst.CSTNode], str | None] | None = None,
+) -> cst.BaseExpression:
     current = expr
     while isinstance(current, cst.Subscript):
-        full_name = get_full_name_for_node(current.value)
+        full_name = name_resolver(current.value) if name_resolver else None
+        if full_name is None:
+            full_name = get_full_name_for_node(current.value)
         if full_name is None or full_name.rsplit(".", 1)[-1] != "Annotated":
             break
 
@@ -277,37 +294,40 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
     def _leaf_name(name: str) -> str:
         return name.rsplit(".", 1)[-1]
 
-    @classmethod
-    def _is_typealias_annotation(cls, annotation: cst.Annotation) -> bool:
-        full_name = get_full_name_for_node(annotation.annotation)
-        return full_name is not None and cls._leaf_name(full_name) == "TypeAlias"
+    def _is_typealias_annotation(self, annotation: cst.Annotation) -> bool:
+        full_name = self._qualified_name(annotation.annotation)
+        if full_name is None:
+            full_name = get_full_name_for_node(annotation.annotation)
+        return full_name is not None and self._leaf_name(full_name) == "TypeAlias"
 
-    @classmethod
-    def _is_special_typeform(cls, expr: cst.BaseExpression) -> bool:
+    def _is_special_typeform(self, expr: cst.BaseExpression) -> bool:
         if not isinstance(expr, cst.Call):
             return False
 
-        full_name = get_full_name_for_node(expr.func)
+        full_name = self._qualified_name(expr.func)
+        if full_name is None:
+            full_name = get_full_name_for_node(expr.func)
         if full_name is None:
             return False
 
-        return cls._leaf_name(full_name) in cls._TYPEFORMS
+        return self._leaf_name(full_name) in self._TYPEFORMS
 
-    @classmethod
     def _typealias_value_from_call(
-        cls,
+        self,
         expr: cst.BaseExpression,
     ) -> cst.BaseExpression | None:
         if not isinstance(expr, cst.Call):
             return None
 
-        full_name = get_full_name_for_node(expr.func)
-        if full_name is None or cls._leaf_name(full_name) != "TypeAliasType":
+        full_name = self._qualified_name(expr.func)
+        if full_name is None:
+            full_name = get_full_name_for_node(expr.func)
+        if full_name is None or self._leaf_name(full_name) != "TypeAliasType":
             return None
 
         positional_args = [arg for arg in expr.args if arg.keyword is None]
-        if len(positional_args) > cls._TYPEALIAS_VALUE_INDEX:
-            return positional_args[cls._TYPEALIAS_VALUE_INDEX].value
+        if len(positional_args) > self._TYPEALIAS_VALUE_INDEX:
+            return positional_args[self._TYPEALIAS_VALUE_INDEX].value
 
         for arg in expr.args:
             if arg.keyword and arg.keyword.value == "value":
@@ -321,10 +341,12 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
             name = f"{self._class_stack[-1]}.{name}"
 
         if _is_public(self._leaf_name(name)):
-            self.type_aliases.append(TypeAlias(name, Expr.from_expr(value)))
+            self.type_aliases.append(
+                TypeAlias(name, Expr.from_expr(value, self._qualified_name)),
+            )
 
-    @staticmethod
     def _param(
+        self,
         param: cst.Param,
         kind: ParamKind,
         known_name: str | None = None,
@@ -332,7 +354,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         if known_name and not param.annotation and param.name.value == known_name:
             annotation = KNOWN
         else:
-            annotation = Expr.from_annotation(param.annotation)
+            annotation = Expr.from_annotation(param.annotation, self._qualified_name)
         return Param(param.name.value, kind, annotation)
 
     def _add(self, name_node: cst.Name, annotation: TypeForm) -> None:
@@ -340,9 +362,8 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         if _is_public(self._leaf_name(name)):
             self.symbols.append(Symbol(name, annotation))
 
-    @classmethod
     def _callable_signature(
-        cls,
+        self,
         node: cst.FunctionDef,
         known_name: str | None = None,
     ) -> Overload:
@@ -355,12 +376,15 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
             ((node.params.star_kwarg,), ParamKind.VAR_KEYWORD),
         ]:
             params.extend(
-                cls._param(param, kind, known_name)
+                self._param(param, kind, known_name)
                 for param in node_params
                 if isinstance(param, cst.Param)
             )
 
-        return Overload(tuple(params), Expr.from_annotation(node.returns))
+        return Overload(
+            tuple(params),
+            Expr.from_annotation(node.returns, self._qualified_name),
+        )
 
     @override
     def visit_ClassDef(self, node: cst.ClassDef) -> bool:
@@ -400,7 +424,10 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
                         self._callable_signature(node, known_name),
                     )
                 elif "property" in decorators or "cached_property" in decorators:
-                    self._add(node.name, Expr.from_annotation(node.returns))
+                    self._add(
+                        node.name,
+                        Expr.from_annotation(node.returns, self._qualified_name),
+                    )
                 else:
                     if overload_list := self._overload_map.pop(name, None):
                         overloads = overload_list[0], *overload_list[1:]
@@ -441,7 +468,10 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
             return
 
         for name_node in _extract_names(node.target):
-            self._add(name_node, Expr.from_expr(node.annotation.annotation))
+            self._add(
+                name_node,
+                Expr.from_expr(node.annotation.annotation, self._qualified_name),
+            )
 
     @override
     def visit_Assign(self, node: cst.Assign) -> None:
