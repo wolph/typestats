@@ -64,7 +64,7 @@ members = [
 [tool.pytest]
 minversion = "9.0"
 testpaths = ["src", "tests"]
-addopts = ["-ra", "--doctest-modules"]
+addopts = ["-ra", "--doctest-modules", "--ignore=tests/fixtures"]
 doctest_optionflags = ["NORMALIZE_WHITESPACE", "IGNORE_EXCEPTION_DETAIL", "ELLIPSIS"]
 filterwarnings = ["error"]
 log_level = "INFO"
@@ -99,7 +99,7 @@ reportUnnecessaryTypeIgnoreComment = true
 
 [tool.ruff]
 src = ["src", "tests"]
-extend-exclude = [".git", ".mypy_cache", ".tox", ".venv", "tests/fixtures"]
+extend-exclude = [".git", ".mypy_cache", ".tox", ".venv"]
 force-exclude = true
 show-fixes = true
 preview = true
@@ -121,3 +121,6 @@ ignore = [
   "TRY003", # tryceratops - raise-vanilla-args
   "RUF067", # ruff - non-empty-init-module
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/fixtures/**" = ["ALL"]
