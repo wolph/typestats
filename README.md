@@ -26,7 +26,7 @@ For a given project:
    - overloaded functions/methods
 7. TODO: Inline type aliases where used in annotations (so we can determine the `Any`-ness)
 8. TODO: Unify `.py` and `.pyi` annotations for each symbol
-9. TODO: Filter out any of the non-public symbols (requires following imports)
+9. Filter out any of the non-public symbols (requires following imports)
 10. TODO: Collect the type-checker configs (to see which strictness flags are used and which
     type-checkers it supports)
 11. TODO: Compute various statistics:
