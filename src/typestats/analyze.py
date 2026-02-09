@@ -22,6 +22,7 @@ __all__ = (
     "TypeAlias",
     "TypeForm",
     "collect_symbols",
+    "is_public",
 )
 
 _EMPTY_MODULE: Final[cst.Module] = cst.Module([])
@@ -185,15 +186,17 @@ class IgnoreComment:
 @dataclass(frozen=True, slots=True)
 class ModuleSymbols:
     imports: tuple[tuple[str, str], ...]
+    imports_wildcard: tuple[str, ...]  # modules from `from _ import *`
     exports_explicit: frozenset[str] | None  # __all__
+    exports_explicit_dynamic: tuple[str, ...]  # __all__ += mod.__all__
     exports_implicit: frozenset[str]  # [from _ ]import $name as $name
     symbols: tuple[Symbol, ...]
     type_aliases: tuple[TypeAlias, ...]
     ignore_comments: tuple[IgnoreComment, ...]
 
 
-def _is_public(name: str) -> bool:
-    return not name.startswith("__") and not name.endswith("__") and name != "_"
+def is_public(name: str) -> bool:
+    return not name.startswith("_") or name.endswith("__")
 
 
 def _extract_names(expr: cst.BaseExpression) -> list[cst.Name]:
@@ -357,11 +360,9 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         return None
 
     def _add_type_alias(self, name_node: cst.Name, value: cst.BaseExpression) -> None:
-        name = self._display_name(name_node)
-        if self._class_stack and self._function_depth == 0 and "." not in name:
-            name = f"{self._class_stack[-1]}.{name}"
+        name = self._symbol_name(name_node)
 
-        if _is_public(self._leaf_name(name)):
+        if is_public(self._leaf_name(name)):
             self.type_aliases.append(
                 TypeAlias(name, Expr.from_expr(value, self._qualified_name)),
             )
@@ -380,7 +381,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
 
     def _add(self, name_node: cst.Name, annotation: TypeForm) -> None:
         name = self._symbol_name(name_node)
-        if _is_public(self._leaf_name(name)):
+        if is_public(self._leaf_name(name)):
             self.symbols.append(Symbol(name, annotation))
 
     def _callable_signature(
@@ -413,7 +414,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
             return False
 
         class_name = self._class_display_name(node)
-        if _is_public(self._leaf_name(class_name)):
+        if is_public(self._leaf_name(class_name)):
             self.symbols.append(Symbol(class_name, Class(class_name)))
         self._class_stack.append(class_name)
         self._enum_class_stack.append(self._is_enum_class(node))
@@ -442,7 +443,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
             else:
                 known_name = None
 
-            if _is_public(self._leaf_name(name)):
+            if is_public(self._leaf_name(name)):
                 if "overload" in decorators:
                     self._overload_map[name].append(
                         self._callable_signature(node, known_name),
@@ -471,7 +472,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
     @override
     def leave_Module(self, original_node: cst.Module) -> None:
         for name, overloads in self._overload_map.items():
-            if name in self._added_functions or not _is_public(self._leaf_name(name)):
+            if name in self._added_functions or not is_public(self._leaf_name(name)):
                 continue
 
             self.symbols.append(
@@ -526,10 +527,12 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
 
 class _ExportsVisitor(GatherExportsVisitor, cst.BatchableCSTVisitor):
     has_explicit_all: bool
+    all_sources: list[str]
 
     def __init__(self, context: CodemodContext) -> None:
         super().__init__(context)
         self.has_explicit_all = False
+        self.all_sources = []
 
     @override
     def get_visitors(self) -> Mapping[str, types.MethodType]:
@@ -568,6 +571,16 @@ class _ExportsVisitor(GatherExportsVisitor, cst.BatchableCSTVisitor):
     def visit_AugAssign(self, node: cst.AugAssign) -> bool:
         if self._is_all_target(node.target):
             self.has_explicit_all = True
+            # Detect __all__ += X.__all__ pattern
+            value = node.value
+            if (
+                isinstance(value, cst.Attribute)
+                and isinstance(value.attr, cst.Name)
+                and value.attr.value == "__all__"
+            ):
+                source_name = get_full_name_for_node(value.value)
+                if source_name:
+                    self.all_sources.append(source_name)
         return super().visit_AugAssign(node)
 
     @override
@@ -618,12 +631,19 @@ class _TypeIgnoreVisitor(cst.BatchableCSTVisitor):
             self.comments.append(IgnoreComment(match.group(1), rules))
 
 
-def collect_symbols(source: str, /) -> ModuleSymbols:
+def collect_symbols(
+    source: str,
+    /,
+    *,
+    package_name: str | None = None,
+) -> ModuleSymbols:
     module = cst.parse_module(source)
     wrapper = MetadataWrapper(module)
     symbol_visitor = _SymbolVisitor(wrapper.module)
     exports_visitor = _ExportsVisitor(CodemodContext())
-    imports_visitor = _ImportsVisitor(CodemodContext())
+    imports_visitor = _ImportsVisitor(
+        CodemodContext(full_package_name=package_name or ""),
+    )
     type_ignore_visitor = _TypeIgnoreVisitor()
     wrapper.visit_batched(
         [symbol_visitor, exports_visitor, imports_visitor, type_ignore_visitor],
@@ -636,12 +656,19 @@ def collect_symbols(source: str, /) -> ModuleSymbols:
             obj: f"{module}.{obj}"
             for module, objects in imports_visitor.object_mapping.items()
             for obj in objects
+            if obj != "*"
         }
         | {
             alias: f"{module}.{obj}"
             for module, aliases in imports_visitor.alias_mapping.items()
             for obj, alias in aliases
         }
+    )
+
+    wildcard_modules = tuple(
+        module
+        for module, objects in imports_visitor.object_mapping.items()
+        if "*" in objects
     )
 
     reexports = frozenset(
@@ -658,9 +685,11 @@ def collect_symbols(source: str, /) -> ModuleSymbols:
     return ModuleSymbols(
         symbols=tuple(symbol_visitor.symbols),
         type_aliases=tuple(symbol_visitor.type_aliases),
-        exports_explicit=exports_visitor.exports_explicit,
-        exports_implicit=reexports,
         imports=tuple(imports.items()),
+        imports_wildcard=wildcard_modules,
+        exports_explicit=exports_visitor.exports_explicit,
+        exports_explicit_dynamic=tuple(exports_visitor.all_sources),
+        exports_implicit=reexports,
         ignore_comments=tuple(type_ignore_visitor.comments),
     )
 
