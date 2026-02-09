@@ -393,6 +393,11 @@ async def collect_public_symbols(
         if mod is not None and mod in module_symbols:
             sources_by_module[mod].append(path)
 
+    # Sort .pyi files before .py files so stub types take precedence
+    # (setdefault in _resolved_union and _module_candidates keeps the first value)
+    for mod_paths in sources_by_module.values():
+        mod_paths.sort(key=lambda p: not p.name.endswith(".pyi"))
+
     top_level_packages = frozenset(module.split(".", 1)[0] for module in module_symbols)
 
     resolver = _SymbolResolver(
@@ -421,5 +426,11 @@ async def example() -> None:
         public_symbols = await collect_public_symbols(path)
         for source_path, symbols in sorted(public_symbols.items()):
             rel_path = source_path.relative_to(path)
-            joined = ", ".join(sorted(symbol.name for symbol in symbols))
-            print(f"{rel_path} -> {joined}")  # noqa: T201
+            n_total = sum(1 for s in symbols if s.type_ is not analyze.KNOWN)
+            n_unknown = sum(1 for s in symbols if s.type_ is analyze.UNKNOWN)
+            names_unknown = ", ".join(
+                sorted(s.name for s in symbols if s.type_ is analyze.UNKNOWN),
+            )
+            print(  # noqa: T201
+                f"{rel_path} -> {n_total} known, {n_unknown} unknown ({names_unknown})",
+            )

@@ -7,6 +7,7 @@ members = [
     "private-reexport",
     "private-reexport-pyi",
     "public-project",
+    "stub-typed-private",
     "typestats",
 ]
 
@@ -389,6 +390,11 @@ wheels = [
 ]
 
 [[package]]
+name = "stub-typed-private"
+version = "0.1.0"
+source = { editable = "tests/fixtures/stub_typed_private" }
+
+[[package]]
 name = "typestats"
 version = "0.0.0.dev0"
 source = { editable = "." }
@@ -411,12 +417,14 @@ dev = [
     { name = "pyrefly" },
     { name = "pytest" },
     { name = "ruff" },
+    { name = "stub-typed-private" },
 ]
 test = [
     { name = "private-reexport" },
     { name = "private-reexport-pyi" },
     { name = "public-project" },
     { name = "pytest" },
+    { name = "stub-typed-private" },
 ]
 
 [package.metadata]
@@ -439,12 +447,14 @@ dev = [
     { name = "pyrefly", specifier = ">=0.51.1" },
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "ruff", specifier = ">=0.15.0" },
+    { name = "stub-typed-private", editable = "tests/fixtures/stub_typed_private" },
 ]
 test = [
     { name = "private-reexport", editable = "tests/fixtures/private_reexport" },
     { name = "private-reexport-pyi", editable = "tests/fixtures/private_reexport_pyi" },
     { name = "public-project", editable = "tests/fixtures/public_project" },
     { name = "pytest", specifier = ">=9.0.2" },
+    { name = "stub-typed-private", editable = "tests/fixtures/stub_typed_private" },
 ]
 
 [[package]]

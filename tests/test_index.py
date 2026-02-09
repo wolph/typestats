@@ -2,6 +2,7 @@ from pathlib import Path
 
 import anyio
 
+from typestats import analyze
 from typestats.index import collect_public_symbols, sources_to_module_paths
 
 _FIXTURES: Path = Path(__file__).parent / "fixtures"
@@ -122,3 +123,27 @@ def test_collect_public_symbols_pyi_relative_imports() -> None:
     # Private module symbols should not leak
     assert "mylib._core._can.CanAdd" not in names
     assert "mylib._core._do.do_add" not in names
+
+
+def _public_symbol_types(project_dir: Path) -> dict[str, analyze.TypeForm]:
+    """Collect public symbol names mapped to their resolved types."""
+
+    async def _run() -> dict[str, analyze.TypeForm]:
+        symbols_by_path = await collect_public_symbols(project_dir)
+        return {
+            symbol.name: symbol.type_
+            for symbols in symbols_by_path.values()
+            for symbol in symbols
+        }
+
+    return anyio.run(_run)
+
+
+def test_collect_public_symbols_pyi_stub_types_not_unknown() -> None:
+    """Symbols typed only in .pyi stubs should not be reported as UNKNOWN."""
+    types = _public_symbol_types(_FIXTURES / "stub_typed_private")
+
+    assert "stubpkg.AnnotatedAlias" in types
+    assert "stubpkg.GenericType" in types
+    assert types["stubpkg.AnnotatedAlias"] is not analyze.UNKNOWN
+    assert types["stubpkg.GenericType"] is not analyze.UNKNOWN
