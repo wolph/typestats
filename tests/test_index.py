@@ -139,6 +139,15 @@ def _public_symbol_types(project_dir: Path) -> dict[str, analyze.TypeForm]:
     return anyio.run(_run)
 
 
+def test_collect_public_symbols_external_reexport() -> None:
+    """Re-exports from external packages should be marked EXTERNAL."""
+    types = _public_symbol_types(_FIXTURES / "public_project")
+
+    # `sin` is imported from stdlib `math` and listed in __all__
+    assert "pkg.sin" in types
+    assert types["pkg.sin"] is analyze.EXTERNAL
+
+
 def test_collect_public_symbols_pyi_stub_types_not_unknown() -> None:
     """Symbols typed only in .pyi stubs should not be reported as UNKNOWN."""
     types = _public_symbol_types(_FIXTURES / "stub_typed_private")
