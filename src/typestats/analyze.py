@@ -185,10 +185,10 @@ class IgnoreComment:
 @dataclass(frozen=True, slots=True)
 class ModuleSymbols:
     imports: tuple[tuple[str, str], ...]
+    imports_wildcard: tuple[str, ...]  # modules from `from _ import *`
     exports_explicit: frozenset[str] | None  # __all__
+    exports_explicit_dynamic: tuple[str, ...]  # __all__ += mod.__all__
     exports_implicit: frozenset[str]  # [from _ ]import $name as $name
-    exports_all_sources: tuple[str, ...]  # names from __all__ += X.__all__
-    wildcard_imports: tuple[str, ...]  # modules from `from X import *`
     symbols: tuple[Symbol, ...]
     type_aliases: tuple[TypeAlias, ...]
     ignore_comments: tuple[IgnoreComment, ...]
@@ -686,11 +686,11 @@ def collect_symbols(
     return ModuleSymbols(
         symbols=tuple(symbol_visitor.symbols),
         type_aliases=tuple(symbol_visitor.type_aliases),
-        exports_explicit=exports_visitor.exports_explicit,
-        exports_implicit=reexports,
-        exports_all_sources=tuple(exports_visitor.all_sources),
-        wildcard_imports=wildcard_modules,
         imports=tuple(imports.items()),
+        imports_wildcard=wildcard_modules,
+        exports_explicit=exports_visitor.exports_explicit,
+        exports_explicit_dynamic=tuple(exports_visitor.all_sources),
+        exports_implicit=reexports,
         ignore_comments=tuple(type_ignore_visitor.comments),
     )
 

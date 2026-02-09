@@ -286,7 +286,7 @@ class _SymbolResolver:
     ) -> _SymbolMap:
         """Expand wildcard imports from internal modules using resolved exports."""
         expanded: _SymbolMap = {}
-        for wc_module in symbols.wildcard_imports:
+        for wc_module in symbols.imports_wildcard:
             if wc_module.split(".", 1)[0] not in self._top_level_packages:
                 continue
             for sym_name, symbol in self._resolved_union.get(wc_module, {}).items():
@@ -301,10 +301,10 @@ class _SymbolResolver:
         /,
     ) -> frozenset[str]:
         """Resolve dynamic __all__ += X.__all__ references to symbol names."""
-        if not symbols.exports_all_sources:
+        if not symbols.exports_explicit_dynamic:
             return frozenset()
         extra_names: set[str] = set()
-        for source_name in symbols.exports_all_sources:
+        for source_name in symbols.exports_explicit_dynamic:
             # Resolve the local name (e.g. "_core") to a module path
             target = import_map.get(source_name)
             if target and target in self._module_symbols:
