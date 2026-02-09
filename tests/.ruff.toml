@@ -3,4 +3,5 @@ extend = "../pyproject.toml"
 [lint]
 extend-ignore = [
   "PLR2004", # pylint/refactor - magic-value-comparison
+  "PLC2701", # pylint/convention - import-private-name
 ]
