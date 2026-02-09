@@ -27,25 +27,23 @@ if TYPE_CHECKING:
         _links: _ContentItemLinks
 
 
-__all__ = ("list_typeshed_stub_dirs",)
+__all__ = "stub_dirs", "stub_packages"
 
-_TYPESHED_STUBS_URL: Final = (
-    "https://api.github.com/repos/python/typeshed/contents/stubs"
-)
+_GH_STUBS_URL: Final = "https://api.github.com/repos/python/typeshed/contents/stubs"
 
 
-async def list_typeshed_stub_dirs(client: httpx.AsyncClient, /) -> list[str]:
+async def stub_dirs(client: httpx.AsyncClient, /) -> list[str]:
     """List stub directory names in python/typeshed using GitHub's contents API."""
-    response = await client.get(_TYPESHED_STUBS_URL)
+    response = await client.get(_GH_STUBS_URL)
     response.raise_for_status()
     data: list[_ContentItem] = response.json()
 
     return sorted(item["name"] for item in data if item.get("type") == "dir")
 
 
-async def list_typeshed_stub_packages(client: httpx.AsyncClient, /) -> list[str]:
+async def stub_packages(client: httpx.AsyncClient, /) -> list[str]:
     """List typeshed's PyPI stub package names."""
-    return [f"types-{stub_dir}" for stub_dir in await list_typeshed_stub_dirs(client)]
+    return [f"types-{stub_dir}" for stub_dir in await stub_dirs(client)]
 
 
 @mainpy.main
@@ -53,5 +51,5 @@ async def example() -> None:
     import httpx  # noqa: PLC0415
 
     async with httpx.AsyncClient(http2=True) as client:
-        stub_dirs = await list_typeshed_stub_dirs(client)
-        print(*stub_dirs, sep="\n")  # noqa: T201
+        packages = await stub_packages(client)
+        print(*packages, sep="\n")  # noqa: T201
