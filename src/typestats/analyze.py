@@ -56,6 +56,7 @@ class ParamKind(StrEnum):
 class _TypeMarker(StrEnum):
     KNOWN = ""  # for `self` and `cls` parameters
     UNKNOWN = "?"  # for other missing annotations
+    EXTERNAL = "~"  # for re-exports from external (non-local) packages
 
     @override
     def __str__(self) -> str:
@@ -64,10 +65,12 @@ class _TypeMarker(StrEnum):
 
 type _UnknownType = Literal[_TypeMarker.UNKNOWN]
 type _KnownType = Literal[_TypeMarker.KNOWN]
+type _ExternalType = Literal[_TypeMarker.EXTERNAL]
 
 
 UNKNOWN: Final[_UnknownType] = _TypeMarker.UNKNOWN
 KNOWN: Final[_KnownType] = _TypeMarker.KNOWN
+EXTERNAL: Final[_ExternalType] = _TypeMarker.EXTERNAL
 
 
 @dataclass(frozen=True, slots=True)

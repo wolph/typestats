@@ -236,7 +236,7 @@ class _SymbolResolver:
             "." not in target
             or target.rsplit(".", 1)[0].split(".", 1)[0] not in self._top_level_packages
         ):
-            return None
+            return analyze.Symbol(name, analyze.EXTERNAL)
 
         target_module, target_name = target.rsplit(".", 1)
         if not _is_public_module(target_module):
@@ -426,7 +426,11 @@ async def example() -> None:
         public_symbols = await collect_public_symbols(path)
         for source_path, symbols in sorted(public_symbols.items()):
             rel_path = source_path.relative_to(path)
-            n_total = sum(1 for s in symbols if s.type_ is not analyze.KNOWN)
+            n_total = sum(
+                1
+                for s in symbols
+                if s.type_ is not analyze.KNOWN and s.type_ is not analyze.EXTERNAL
+            )
             n_unknown = sum(1 for s in symbols if s.type_ is analyze.UNKNOWN)
             names_unknown = ", ".join(
                 sorted(s.name for s in symbols if s.type_ is analyze.UNKNOWN),
