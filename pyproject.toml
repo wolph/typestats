@@ -34,11 +34,29 @@ dependencies = [
 typestats = "typestats:__main__.app"
 
 [dependency-groups]
+test = [
+  "pytest>=9.0.2",
+  "public-project",
+  "private-reexport",
+  "private-reexport-pyi",
+]
 dev = [
+  { include-group = "test" },
   "dprint-py>=0.51.1.0",
   "pyrefly>=0.51.1",
   "ruff>=0.15.0",
-  "pytest>=9.0.2",
+]
+
+[tool.uv.sources]
+public-project = { workspace = true }
+private-reexport = { workspace = true }
+private-reexport-pyi = { workspace = true }
+
+[tool.uv.workspace]
+members = [
+  "tests/fixtures/public_project",
+  "tests/fixtures/private_reexport",
+  "tests/fixtures/private_reexport_pyi",
 ]
 
 # pytest
@@ -81,7 +99,7 @@ reportUnnecessaryTypeIgnoreComment = true
 
 [tool.ruff]
 src = ["src", "tests"]
-extend-exclude = [".git", ".mypy_cache", ".tox", ".venv"]
+extend-exclude = [".git", ".mypy_cache", ".tox", ".venv", "tests/fixtures"]
 force-exclude = true
 show-fixes = true
 preview = true

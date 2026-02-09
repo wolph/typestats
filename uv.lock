@@ -2,6 +2,14 @@ version = 1
 revision = 3
 requires-python = ">=3.14"
 
+[manifest]
+members = [
+    "private-reexport",
+    "private-reexport-pyi",
+    "public-project",
+    "typestats",
+]
+
 [[package]]
 name = "anyio"
 version = "4.12.1"
@@ -235,6 +243,16 @@ wheels = [
 ]
 
 [[package]]
+name = "private-reexport"
+version = "0.1.0"
+source = { editable = "tests/fixtures/private_reexport" }
+
+[[package]]
+name = "private-reexport-pyi"
+version = "0.1.0"
+source = { editable = "tests/fixtures/private_reexport_pyi" }
+
+[[package]]
 name = "propcache"
 version = "0.4.1"
 source = { registry = "https://pypi.org/simple" }
@@ -272,6 +290,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/c4/2d/346e946d4951f37eca1e4f55be0f0174c52cd70720f84029b02f296f4a38/propcache-0.4.1-cp314-cp314t-win_arm64.whl", hash = "sha256:ecef2343af4cc68e05131e45024ba34f6095821988a9d0a02aa7c73fcc448aa9", size = 40428, upload-time = "2025-10-08T19:48:35.441Z" },
     { url = "https://files.pythonhosted.org/packages/5b/5a/bc7b4a4ef808fa59a816c17b20c4bef6884daebbdf627ff2a161da67da19/propcache-0.4.1-py3-none-any.whl", hash = "sha256:af2a6052aeb6cf17d3e46ee169099044fd8224cbaf75c76a2ef596e8163e2237", size = 13305, upload-time = "2025-10-08T19:49:00.792Z" },
 ]
+
+[[package]]
+name = "public-project"
+version = "0.1.0"
+source = { editable = "tests/fixtures/public_project" }
 
 [[package]]
 name = "pygments"
@@ -382,9 +405,18 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "dprint-py" },
+    { name = "private-reexport" },
+    { name = "private-reexport-pyi" },
+    { name = "public-project" },
     { name = "pyrefly" },
     { name = "pytest" },
     { name = "ruff" },
+]
+test = [
+    { name = "private-reexport" },
+    { name = "private-reexport-pyi" },
+    { name = "public-project" },
+    { name = "pytest" },
 ]
 
 [package.metadata]
@@ -401,9 +433,18 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "dprint-py", specifier = ">=0.51.1.0" },
+    { name = "private-reexport", editable = "tests/fixtures/private_reexport" },
+    { name = "private-reexport-pyi", editable = "tests/fixtures/private_reexport_pyi" },
+    { name = "public-project", editable = "tests/fixtures/public_project" },
     { name = "pyrefly", specifier = ">=0.51.1" },
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "ruff", specifier = ">=0.15.0" },
+]
+test = [
+    { name = "private-reexport", editable = "tests/fixtures/private_reexport" },
+    { name = "private-reexport-pyi", editable = "tests/fixtures/private_reexport_pyi" },
+    { name = "public-project", editable = "tests/fixtures/public_project" },
+    { name = "pytest", specifier = ">=9.0.2" },
 ]
 
 [[package]]
