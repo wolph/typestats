@@ -187,6 +187,8 @@ class ModuleSymbols:
     imports: tuple[tuple[str, str], ...]
     exports_explicit: frozenset[str] | None  # __all__
     exports_implicit: frozenset[str]  # [from _ ]import $name as $name
+    exports_all_sources: tuple[str, ...]  # names from __all__ += X.__all__
+    wildcard_imports: tuple[str, ...]  # modules from `from X import *`
     symbols: tuple[Symbol, ...]
     type_aliases: tuple[TypeAlias, ...]
     ignore_comments: tuple[IgnoreComment, ...]
@@ -526,10 +528,12 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
 
 class _ExportsVisitor(GatherExportsVisitor, cst.BatchableCSTVisitor):
     has_explicit_all: bool
+    all_sources: list[str]
 
     def __init__(self, context: CodemodContext) -> None:
         super().__init__(context)
         self.has_explicit_all = False
+        self.all_sources = []
 
     @override
     def get_visitors(self) -> Mapping[str, types.MethodType]:
@@ -568,6 +572,16 @@ class _ExportsVisitor(GatherExportsVisitor, cst.BatchableCSTVisitor):
     def visit_AugAssign(self, node: cst.AugAssign) -> bool:
         if self._is_all_target(node.target):
             self.has_explicit_all = True
+            # Detect __all__ += X.__all__ pattern
+            value = node.value
+            if (
+                isinstance(value, cst.Attribute)
+                and isinstance(value.attr, cst.Name)
+                and value.attr.value == "__all__"
+            ):
+                source_name = get_full_name_for_node(value.value)
+                if source_name:
+                    self.all_sources.append(source_name)
         return super().visit_AugAssign(node)
 
     @override
@@ -618,12 +632,19 @@ class _TypeIgnoreVisitor(cst.BatchableCSTVisitor):
             self.comments.append(IgnoreComment(match.group(1), rules))
 
 
-def collect_symbols(source: str, /) -> ModuleSymbols:
+def collect_symbols(
+    source: str,
+    /,
+    *,
+    package_name: str | None = None,
+) -> ModuleSymbols:
     module = cst.parse_module(source)
     wrapper = MetadataWrapper(module)
     symbol_visitor = _SymbolVisitor(wrapper.module)
     exports_visitor = _ExportsVisitor(CodemodContext())
-    imports_visitor = _ImportsVisitor(CodemodContext())
+    imports_visitor = _ImportsVisitor(
+        CodemodContext(full_package_name=package_name or ""),
+    )
     type_ignore_visitor = _TypeIgnoreVisitor()
     wrapper.visit_batched(
         [symbol_visitor, exports_visitor, imports_visitor, type_ignore_visitor],
@@ -636,12 +657,19 @@ def collect_symbols(source: str, /) -> ModuleSymbols:
             obj: f"{module}.{obj}"
             for module, objects in imports_visitor.object_mapping.items()
             for obj in objects
+            if obj != "*"
         }
         | {
             alias: f"{module}.{obj}"
             for module, aliases in imports_visitor.alias_mapping.items()
             for obj, alias in aliases
         }
+    )
+
+    wildcard_modules = tuple(
+        module
+        for module, objects in imports_visitor.object_mapping.items()
+        if "*" in objects
     )
 
     reexports = frozenset(
@@ -660,6 +688,8 @@ def collect_symbols(source: str, /) -> ModuleSymbols:
         type_aliases=tuple(symbol_visitor.type_aliases),
         exports_explicit=exports_visitor.exports_explicit,
         exports_implicit=reexports,
+        exports_all_sources=tuple(exports_visitor.all_sources),
+        wildcard_imports=wildcard_modules,
         imports=tuple(imports.items()),
         ignore_comments=tuple(type_ignore_visitor.comments),
     )
