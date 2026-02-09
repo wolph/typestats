@@ -22,6 +22,7 @@ __all__ = (
     "TypeAlias",
     "TypeForm",
     "collect_symbols",
+    "is_public",
 )
 
 _EMPTY_MODULE: Final[cst.Module] = cst.Module([])
@@ -194,8 +195,8 @@ class ModuleSymbols:
     ignore_comments: tuple[IgnoreComment, ...]
 
 
-def _is_public(name: str) -> bool:
-    return not name.startswith("__") and not name.endswith("__") and name != "_"
+def is_public(name: str) -> bool:
+    return not name.startswith("_") or name.endswith("__")
 
 
 def _extract_names(expr: cst.BaseExpression) -> list[cst.Name]:
@@ -359,11 +360,9 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         return None
 
     def _add_type_alias(self, name_node: cst.Name, value: cst.BaseExpression) -> None:
-        name = self._display_name(name_node)
-        if self._class_stack and self._function_depth == 0 and "." not in name:
-            name = f"{self._class_stack[-1]}.{name}"
+        name = self._symbol_name(name_node)
 
-        if _is_public(self._leaf_name(name)):
+        if is_public(self._leaf_name(name)):
             self.type_aliases.append(
                 TypeAlias(name, Expr.from_expr(value, self._qualified_name)),
             )
@@ -382,7 +381,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
 
     def _add(self, name_node: cst.Name, annotation: TypeForm) -> None:
         name = self._symbol_name(name_node)
-        if _is_public(self._leaf_name(name)):
+        if is_public(self._leaf_name(name)):
             self.symbols.append(Symbol(name, annotation))
 
     def _callable_signature(
@@ -415,7 +414,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
             return False
 
         class_name = self._class_display_name(node)
-        if _is_public(self._leaf_name(class_name)):
+        if is_public(self._leaf_name(class_name)):
             self.symbols.append(Symbol(class_name, Class(class_name)))
         self._class_stack.append(class_name)
         self._enum_class_stack.append(self._is_enum_class(node))
@@ -444,7 +443,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
             else:
                 known_name = None
 
-            if _is_public(self._leaf_name(name)):
+            if is_public(self._leaf_name(name)):
                 if "overload" in decorators:
                     self._overload_map[name].append(
                         self._callable_signature(node, known_name),
@@ -473,7 +472,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
     @override
     def leave_Module(self, original_node: cst.Module) -> None:
         for name, overloads in self._overload_map.items():
-            if name in self._added_functions or not _is_public(self._leaf_name(name)):
+            if name in self._added_functions or not is_public(self._leaf_name(name)):
                 continue
 
             self.symbols.append(

@@ -26,11 +26,6 @@ _logger: Final = logging.getLogger(__name__)
 _RE_INIT: Final = re.compile(r"^__init__\.pyi?$")
 _RE_STUBS_DIR: Final = re.compile(r"^(.+)-stubs$")
 
-_ALLOWED_DUNDERS: Final = frozenset({"__version__", "__version_info__"})
-_RE_DUNDER: Final = re.compile(
-    rf"(?m)^[ \t]*({'|'.join(map(re.escape, sorted(_ALLOWED_DUNDERS)))})\s*[:=]",
-)
-
 type _SymbolMap = dict[str, analyze.Symbol]
 
 
@@ -152,18 +147,10 @@ def _is_public_module(module_path: str, /) -> bool:
     return all(not part.startswith("_") for part in module_path.split("."))
 
 
-def _local_symbol_candidates(
-    source_text: str,
-    symbols: analyze.ModuleSymbols,
-    /,
-) -> _SymbolMap:
-    """Get locally-defined symbol candidates (dunders, type aliases, symbols)."""
-    # Build with increasing priority: dunders < aliases < symbols
-    candidates: _SymbolMap = {
-        name: analyze.Symbol(name, analyze.UNKNOWN)
-        for name in _RE_DUNDER.findall(source_text)
-        if name in _ALLOWED_DUNDERS
-    }
+def _local_symbol_candidates(symbols: analyze.ModuleSymbols, /) -> _SymbolMap:
+    """Get locally-defined symbol candidates (type aliases, symbols)."""
+    # Build with increasing priority: aliases < symbols
+    candidates: _SymbolMap = {}
     for alias in symbols.type_aliases:
         if "." not in alias.name:
             candidates[alias.name] = analyze.Symbol(alias.name, alias.value)
@@ -183,24 +170,17 @@ def _package_name(module_path: str, source_path: anyio.Path, /) -> str:
 async def _collect_module_symbols(
     module_paths: Mapping[str, frozenset[anyio.Path]],
     /,
-) -> tuple[
-    Mapping[str, Mapping[anyio.Path, analyze.ModuleSymbols]],
-    Mapping[anyio.Path, str],
-]:
-    """Collect symbols per module, returning them with their source texts."""
+) -> Mapping[str, Mapping[anyio.Path, analyze.ModuleSymbols]]:
+    """Collect symbols per module."""
     result: dict[str, dict[anyio.Path, analyze.ModuleSymbols]] = {}
-    source_texts: dict[anyio.Path, str] = {}
     for mod, paths in module_paths.items():
         mod_result: dict[anyio.Path, analyze.ModuleSymbols] = {}
         for path in paths:
             text = await path.read_text()
-            source_texts[path] = text
-            mod_result[path] = analyze.collect_symbols(
-                text,
-                package_name=_package_name(mod, path),
-            )
+            package_name = _package_name(mod, path)
+            mod_result[path] = analyze.collect_symbols(text, package_name=package_name)
         result[mod] = mod_result
-    return result, source_texts
+    return result
 
 
 class _SymbolResolver:
@@ -209,12 +189,10 @@ class _SymbolResolver:
     def __init__(
         self,
         module_symbols: Mapping[str, Mapping[anyio.Path, analyze.ModuleSymbols]],
-        source_texts: Mapping[anyio.Path, str],
         sources_by_module: Mapping[str, Sequence[anyio.Path]],
         top_level_packages: frozenset[str],
     ) -> None:
         self._module_symbols = module_symbols
-        self._source_texts = source_texts
         self._sources_by_module = sources_by_module
         self._top_level_packages = top_level_packages
         self._resolved: defaultdict[str, dict[anyio.Path, _SymbolMap]] = defaultdict(
@@ -234,8 +212,7 @@ class _SymbolResolver:
         candidates: _SymbolMap = {}
         for source_path in self._sources_by_module.get(module_path, ()):
             symbols = self._module_symbols[module_path][source_path]
-            text = self._source_texts[source_path]
-            for name, symbol in _local_symbol_candidates(text, symbols).items():
+            for name, symbol in _local_symbol_candidates(symbols).items():
                 candidates.setdefault(name, symbol)
 
         self._candidates_cache[module_path] = candidates
@@ -251,7 +228,7 @@ class _SymbolResolver:
     ) -> analyze.Symbol | None:
         """Resolve an imported symbol to its public type, if applicable."""
         if target in self._module_symbols:
-            if any(part.startswith("_") for part in target.split(".")):
+            if not _is_public_module(target):
                 return analyze.Symbol(name, analyze.UNKNOWN)
             return None
 
@@ -316,7 +293,6 @@ class _SymbolResolver:
 
     def _resolve_source(
         self,
-        symbol_path: anyio.Path,
         symbols: analyze.ModuleSymbols,
         /,
         *,
@@ -324,8 +300,7 @@ class _SymbolResolver:
     ) -> _SymbolMap:
         """Resolve the exported symbols for a single source file."""
         import_map = dict(symbols.imports)
-        text = self._source_texts[symbol_path]
-        candidates = _local_symbol_candidates(text, symbols)
+        candidates = _local_symbol_candidates(symbols)
 
         # Expand wildcard imports from internal modules
         wildcard_symbols = self._expand_wildcard_imports(symbols, import_map)
@@ -338,14 +313,14 @@ class _SymbolResolver:
             export_names = frozenset(
                 n
                 for n in {*candidates, *import_map}
-                if n in _ALLOWED_DUNDERS or (not n.startswith("_") and n != "*")
+                if analyze.is_public(n) and n != "*"
             )
         else:
             # Without __all__, only local symbols and re-exports (PEP 484)
             export_names = frozenset(
                 n
                 for n in {*candidates, *symbols.exports_implicit}
-                if n in _ALLOWED_DUNDERS or not n.startswith("_")
+                if analyze.is_public(n)
             )
 
         has_explicit_exports = symbols.exports_explicit is not None or is_private
@@ -370,7 +345,6 @@ class _SymbolResolver:
             is_public = _is_public_module(module_path)
             for symbol_path in self._sources_by_module.get(module_path, ()):
                 exports = self._resolve_source(
-                    symbol_path,
                     entries[symbol_path],
                     is_private=not is_public,
                 )
@@ -408,7 +382,7 @@ async def collect_public_symbols(
     sources = list(await list_sources(project_dir))
     module_paths = sources_to_module_paths(sources)
 
-    module_symbols, source_texts = await _collect_module_symbols(module_paths)
+    module_symbols = await _collect_module_symbols(module_paths)
 
     path_to_mod = {path: mod for mod, paths in module_paths.items() for path in paths}
 
@@ -423,7 +397,6 @@ async def collect_public_symbols(
 
     resolver = _SymbolResolver(
         module_symbols=module_symbols,
-        source_texts=source_texts,
         sources_by_module=sources_by_module,
         top_level_packages=top_level_packages,
     )
