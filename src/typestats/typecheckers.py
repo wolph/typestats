@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
     from _typeshed import Incomplete, StrPath  # noqa: PLC2701
 
-__all__ = ("mypy_config",)
+__all__ = ("mypy_config", "pyrefly_config")
 
 
 type _AsyncParser = Callable[[anyio.Path], Awaitable[dict[str, Incomplete] | None]]
@@ -162,3 +162,47 @@ async def mypy_config(project_dir: StrPath, /) -> dict[str, Incomplete] | None:
     See https://mypy.readthedocs.io/en/stable/config_file.html
     """
     return await _mypy.find(project_dir)
+
+
+class PyreflyConfig(TypecheckerConfig):
+    """
+    Discover and parse Pyrefly configuration.
+
+    See https://pyrefly.org/en/docs/configuration/
+    """
+
+    @property
+    @override
+    def _project_config_files(self) -> Sequence[tuple[str, _AsyncParser]]:
+        return (
+            ("pyrefly.toml", self._parse_toml),
+            ("pyproject.toml", self._parse_pyproject),
+        )
+
+    @staticmethod
+    async def _parse_toml(path: anyio.Path, /) -> dict[str, Incomplete] | None:
+        """Parse a ``pyrefly.toml`` file."""
+        parsed = tomllib.loads(await path.read_text())
+        return dict(parsed) if parsed else None
+
+    @staticmethod
+    async def _parse_pyproject(path: anyio.Path, /) -> dict[str, Incomplete] | None:
+        """Parse Pyrefly config from ``[tool.pyrefly]``."""
+        if (tool := await _parse_pyproject_tool(path)) is None:
+            return None
+        if not isinstance(pyrefly := tool.get("pyrefly"), dict):
+            return None
+        return dict(pyrefly)
+
+
+_pyrefly = PyreflyConfig()
+
+
+async def pyrefly_config(project_dir: StrPath, /) -> dict[str, Incomplete] | None:
+    """
+    Returns the Pyrefly config for the given project directory, or ``None``
+    if no config is found.
+
+    See https://pyrefly.org/en/docs/configuration/
+    """
+    return await _pyrefly.find(project_dir)

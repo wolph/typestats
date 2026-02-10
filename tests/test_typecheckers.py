@@ -2,7 +2,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from typestats.typecheckers import mypy_config
+from typestats.typecheckers import mypy_config, pyrefly_config
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -172,3 +172,125 @@ class TestMypyConfig:
         """A mypy.ini without a [mypy] section should be skipped."""
         (tmp_path / "mypy.ini").write_text("[other]\nfoo = bar\n")
         assert await mypy_config(tmp_path) is None
+
+
+class TestPyreflyConfig:
+    # --- no config ---
+
+    async def test_none(self, tmp_path: Path) -> None:
+        assert await pyrefly_config(tmp_path) is None
+
+    async def test_empty_pyproject(self, tmp_path: Path) -> None:
+        (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+        assert await pyrefly_config(tmp_path) is None
+
+    # --- pyrefly.toml ---
+
+    async def test_pyrefly_toml_basic(self, tmp_path: Path) -> None:
+        (tmp_path / "pyrefly.toml").write_text(
+            'python-version = "3.12"\npython-platform = "linux"\n',
+        )
+        config = await pyrefly_config(tmp_path)
+        assert config is not None
+        assert config["python-version"] == "3.12"
+        assert config["python-platform"] == "linux"
+
+    async def test_pyrefly_toml_with_includes_excludes(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        (tmp_path / "pyrefly.toml").write_text(
+            'project-includes = ["src"]\n'
+            'project-excludes = ["**/tests"]\n'
+            'search-path = ["src"]\n',
+        )
+        config = await pyrefly_config(tmp_path)
+        assert config is not None
+        assert config["project-includes"] == ["src"]
+        assert config["project-excludes"] == ["**/tests"]
+        assert config["search-path"] == ["src"]
+
+    async def test_pyrefly_toml_with_errors_table(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        (tmp_path / "pyrefly.toml").write_text(
+            "[errors]\nbad-assignment = false\nbad-return = false\n",
+        )
+        config = await pyrefly_config(tmp_path)
+        assert config is not None
+        assert config["errors"]["bad-assignment"] is False
+        assert config["errors"]["bad-return"] is False
+
+    async def test_pyrefly_toml_empty_skipped(self, tmp_path: Path) -> None:
+        """An empty pyrefly.toml should be skipped (returns None)."""
+        (tmp_path / "pyrefly.toml").write_text("")
+        assert await pyrefly_config(tmp_path) is None
+
+    # --- pyproject.toml ---
+
+    async def test_pyproject_toml(self, tmp_path: Path) -> None:
+        (tmp_path / "pyproject.toml").write_text(
+            '[tool.pyrefly]\npython-version = "3.12"\npython-platform = "linux"\n',
+        )
+        config = await pyrefly_config(tmp_path)
+        assert config is not None
+        assert config["python-version"] == "3.12"
+        assert config["python-platform"] == "linux"
+
+    async def test_pyproject_toml_with_errors(self, tmp_path: Path) -> None:
+        (tmp_path / "pyproject.toml").write_text(
+            "[tool.pyrefly]\n"
+            'ignore-missing-imports = ["some.lib.*"]\n'
+            "\n"
+            "[tool.pyrefly.errors]\n"
+            "bad-assignment = false\n",
+        )
+        config = await pyrefly_config(tmp_path)
+        assert config is not None
+        assert config["ignore-missing-imports"] == ["some.lib.*"]
+        assert config["errors"]["bad-assignment"] is False
+
+    # --- discovery order / precedence ---
+
+    async def test_toml_takes_precedence_over_pyproject(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        (tmp_path / "pyrefly.toml").write_text('python-version = "3.13"\n')
+        (tmp_path / "pyproject.toml").write_text(
+            '[tool.pyrefly]\npython-version = "3.12"\n',
+        )
+        config = await pyrefly_config(tmp_path)
+        assert config is not None
+        assert config["python-version"] == "3.13"
+
+    # --- walk-up behaviour ---
+
+    async def test_walks_up_to_parent(self, tmp_path: Path) -> None:
+        (tmp_path / "pyrefly.toml").write_text('python-version = "3.12"\n')
+        child = tmp_path / "sub" / "pkg"
+        child.mkdir(parents=True)
+        config = await pyrefly_config(child)
+        assert config is not None
+        assert config["python-version"] == "3.12"
+
+    async def test_nearest_config_wins(self, tmp_path: Path) -> None:
+        """A config in a closer ancestor should win over one further up."""
+        (tmp_path / "pyrefly.toml").write_text('python-version = "3.11"\n')
+        child = tmp_path / "sub"
+        child.mkdir()
+        (child / "pyrefly.toml").write_text('python-version = "3.13"\n')
+        config = await pyrefly_config(child)
+        assert config is not None
+        assert config["python-version"] == "3.13"
+
+    async def test_walks_up_pyproject(self, tmp_path: Path) -> None:
+        (tmp_path / "pyproject.toml").write_text(
+            '[tool.pyrefly]\npython-version = "3.12"\n',
+        )
+        child = tmp_path / "sub" / "pkg"
+        child.mkdir(parents=True)
+        config = await pyrefly_config(child)
+        assert config is not None
+        assert config["python-version"] == "3.12"
