@@ -2,7 +2,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from typestats.typecheckers import mypy_config, pyrefly_config, ty_config
+from typestats.typecheckers import mypy_config, pyrefly_config, ty_config, zuban_config
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -402,3 +402,78 @@ class TestTyConfig:
         config = await ty_config(project)
         assert config is not None
         assert config["python-version"] == "3.11"
+
+
+class TestZubanConfig:
+    # --- no config ---
+
+    async def test_none(self, tmp_path: Path) -> None:
+        assert await zuban_config(tmp_path) is None
+
+    async def test_empty_pyproject(self, tmp_path: Path) -> None:
+        (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+        assert await zuban_config(tmp_path) is None
+
+    async def test_pyproject_without_tool_zuban_skipped(self, tmp_path: Path) -> None:
+        """A pyproject.toml without [tool.zuban] should be skipped."""
+        (tmp_path / "pyproject.toml").write_text("[tool.mypy]\nstrict = true\n")
+        assert await zuban_config(tmp_path) is None
+
+    # --- pyproject.toml ---
+
+    async def test_pyproject_toml_basic(self, tmp_path: Path) -> None:
+        (tmp_path / "pyproject.toml").write_text(
+            "[tool.zuban]\nstrict = true\ndisallow_untyped_defs = true\n",
+        )
+        config = await zuban_config(tmp_path)
+        assert config is not None
+        assert config["strict"] is True
+        assert config["disallow_untyped_defs"] is True
+
+    async def test_pyproject_toml_with_mode(self, tmp_path: Path) -> None:
+        (tmp_path / "pyproject.toml").write_text(
+            '[tool.zuban]\nmode = "default"\nwarn_unreachable = true\n',
+        )
+        config = await zuban_config(tmp_path)
+        assert config is not None
+        assert config["mode"] == "default"
+        assert config["warn_unreachable"] is True
+
+    async def test_pyproject_toml_zuban_specific_options(self, tmp_path: Path) -> None:
+        (tmp_path / "pyproject.toml").write_text(
+            "[tool.zuban]\n"
+            "untyped_strict_optional = true\n"
+            'untyped_function_return_mode = "inferred"\n',
+        )
+        config = await zuban_config(tmp_path)
+        assert config is not None
+        assert config["untyped_strict_optional"] is True
+        assert config["untyped_function_return_mode"] == "inferred"
+
+    async def test_pyproject_toml_with_mypy_path(self, tmp_path: Path) -> None:
+        (tmp_path / "pyproject.toml").write_text(
+            '[tool.zuban]\nmypy_path = ["src", "src2/nested"]\n',
+        )
+        config = await zuban_config(tmp_path)
+        assert config is not None
+        assert config["mypy_path"] == ["src", "src2/nested"]
+
+    # --- walk-up behaviour ---
+
+    async def test_walks_up_to_parent(self, tmp_path: Path) -> None:
+        (tmp_path / "pyproject.toml").write_text("[tool.zuban]\nstrict = true\n")
+        child = tmp_path / "sub" / "pkg"
+        child.mkdir(parents=True)
+        config = await zuban_config(child)
+        assert config is not None
+        assert config["strict"] is True
+
+    async def test_nearest_config_wins(self, tmp_path: Path) -> None:
+        """A config in a closer ancestor should win over one further up."""
+        (tmp_path / "pyproject.toml").write_text("[tool.zuban]\nstrict = false\n")
+        child = tmp_path / "sub"
+        child.mkdir()
+        (child / "pyproject.toml").write_text("[tool.zuban]\nstrict = true\n")
+        config = await zuban_config(child)
+        assert config is not None
+        assert config["strict"] is True
