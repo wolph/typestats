@@ -111,7 +111,8 @@ def _latest_sdist(details: ProjectDetail, /) -> FileDetail:
     sdists = [
         sdist
         for sdist in details["files"]
-        if not sdist["filename"].endswith(".whl") and not sdist.get("yanked", False)
+        if (sdist["filename"].endswith((".tar.gz", ".zip")))
+        and not sdist.get("yanked", False)
     ]
 
     return max(sdists, key=lambda sdist: parse_sdist_filename(sdist["filename"])[1])
