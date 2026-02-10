@@ -2,7 +2,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from typestats.typecheckers import mypy_config, pyrefly_config
+from typestats.typecheckers import mypy_config, pyrefly_config, ty_config
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -294,3 +294,111 @@ class TestPyreflyConfig:
         config = await pyrefly_config(child)
         assert config is not None
         assert config["python-version"] == "3.12"
+
+
+class TestTyConfig:
+    # --- no config ---
+
+    async def test_none(self, tmp_path: Path) -> None:
+        assert await ty_config(tmp_path) is None
+
+    async def test_empty_pyproject(self, tmp_path: Path) -> None:
+        (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+        assert await ty_config(tmp_path) is None
+
+    # --- ty.toml ---
+
+    async def test_ty_toml_basic(self, tmp_path: Path) -> None:
+        (tmp_path / "ty.toml").write_text('python-version = "3.12"\n')
+        config = await ty_config(tmp_path)
+        assert config is not None
+        assert config["python-version"] == "3.12"
+
+    async def test_ty_toml_with_rules(self, tmp_path: Path) -> None:
+        (tmp_path / "ty.toml").write_text('[rules]\nindex-out-of-bounds = "ignore"\n')
+        config = await ty_config(tmp_path)
+        assert config is not None
+        assert config["rules"]["index-out-of-bounds"] == "ignore"
+
+    async def test_ty_toml_empty_skipped(self, tmp_path: Path) -> None:
+        """An empty ty.toml should be skipped (returns None)."""
+        (tmp_path / "ty.toml").write_text("")
+        assert await ty_config(tmp_path) is None
+
+    # --- pyproject.toml ---
+
+    async def test_pyproject_toml(self, tmp_path: Path) -> None:
+        (tmp_path / "pyproject.toml").write_text('[tool.ty]\npython-version = "3.12"\n')
+        config = await ty_config(tmp_path)
+        assert config is not None
+        assert config["python-version"] == "3.12"
+
+    async def test_pyproject_toml_with_rules(self, tmp_path: Path) -> None:
+        (tmp_path / "pyproject.toml").write_text(
+            '[tool.ty]\n\n[tool.ty.rules]\nindex-out-of-bounds = "ignore"\n',
+        )
+        config = await ty_config(tmp_path)
+        assert config is not None
+        assert config["rules"]["index-out-of-bounds"] == "ignore"
+
+    async def test_pyproject_without_tool_ty_skipped(self, tmp_path: Path) -> None:
+        """A pyproject.toml without [tool.ty] should be skipped."""
+        (tmp_path / "pyproject.toml").write_text("[tool.other]\nfoo = 'bar'\n")
+        assert await ty_config(tmp_path) is None
+
+    # --- discovery order / precedence ---
+
+    async def test_toml_takes_precedence_over_pyproject(self, tmp_path: Path) -> None:
+        (tmp_path / "ty.toml").write_text('python-version = "3.13"\n')
+        (tmp_path / "pyproject.toml").write_text('[tool.ty]\npython-version = "3.12"\n')
+        config = await ty_config(tmp_path)
+        assert config is not None
+        assert config["python-version"] == "3.13"
+
+    # --- walk-up behaviour ---
+
+    async def test_walks_up_to_parent(self, tmp_path: Path) -> None:
+        (tmp_path / "ty.toml").write_text('python-version = "3.12"\n')
+        child = tmp_path / "sub" / "pkg"
+        child.mkdir(parents=True)
+        config = await ty_config(child)
+        assert config is not None
+        assert config["python-version"] == "3.12"
+
+    async def test_nearest_config_wins(self, tmp_path: Path) -> None:
+        """A config in a closer ancestor should win over one further up."""
+        (tmp_path / "ty.toml").write_text('python-version = "3.11"\n')
+        child = tmp_path / "sub"
+        child.mkdir()
+        (child / "ty.toml").write_text('python-version = "3.13"\n')
+        config = await ty_config(child)
+        assert config is not None
+        assert config["python-version"] == "3.13"
+
+    async def test_walks_up_pyproject(self, tmp_path: Path) -> None:
+        (tmp_path / "pyproject.toml").write_text('[tool.ty]\npython-version = "3.12"\n')
+        child = tmp_path / "sub" / "pkg"
+        child.mkdir(parents=True)
+        config = await ty_config(child)
+        assert config is not None
+        assert config["python-version"] == "3.12"
+
+    # --- user-level fallback ---
+
+    async def test_user_config_fallback(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        xdg = tmp_path / "xdg"
+        user_config = xdg / "ty" / "ty.toml"
+        user_config.parent.mkdir(parents=True)
+        user_config.write_text('python-version = "3.11"\n')
+
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+
+        project = tmp_path / "project"
+        project.mkdir()
+        config = await ty_config(project)
+        assert config is not None
+        assert config["python-version"] == "3.11"

@@ -27,8 +27,8 @@ For a given project:
 7. TODO: Inline type aliases where used in annotations (so we can determine the `Any`-ness)
 8. TODO: Unify `.py` and `.pyi` annotations for each symbol
 9. Filter out any of the non-public symbols (requires following imports)
-10. TODO: Collect the type-checker configs (to see which strictness flags are used and which
-    type-checkers it supports)
+10. Collect the type-checker configs to see which strictness flags are used and which
+    type-checkers it supports (mypy, (based)pyright, pyrefly, ty)
 11. TODO: Compute various statistics:
     - coverage (% of public symbols annotated)
     - strict coverage (% of public symbols annotated without `Any`)

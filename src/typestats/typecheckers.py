@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
     from _typeshed import Incomplete, StrPath  # noqa: PLC2701
 
-__all__ = ("mypy_config", "pyrefly_config")
+__all__ = ("mypy_config", "pyrefly_config", "ty_config")
 
 
 type _AsyncParser = Callable[[anyio.Path], Awaitable[dict[str, Incomplete] | None]]
@@ -206,3 +206,61 @@ async def pyrefly_config(project_dir: StrPath, /) -> dict[str, Incomplete] | Non
     See https://pyrefly.org/en/docs/configuration/
     """
     return await _pyrefly.find(project_dir)
+
+
+class TyConfig(TypecheckerConfig):
+    """
+    Discover and parse ty configuration.
+
+    See https://docs.astral.sh/ty/configuration/
+    """
+
+    @property
+    @override
+    def _project_config_files(self) -> Sequence[tuple[str, _AsyncParser]]:
+        return (
+            ("ty.toml", self._parse_toml),
+            ("pyproject.toml", self._parse_pyproject),
+        )
+
+    @property
+    @override
+    def _user_config_files(self) -> Sequence[tuple[anyio.Path, _AsyncParser]]:
+        paths: list[tuple[anyio.Path, _AsyncParser]] = []
+
+        if xdg := os.environ.get("XDG_CONFIG_HOME"):
+            paths.append((anyio.Path(xdg) / "ty" / "ty.toml", self._parse_toml))
+
+        paths.append((
+            anyio.Path(Path.home() / ".config" / "ty" / "ty.toml"),
+            self._parse_toml,
+        ))
+        return paths
+
+    @staticmethod
+    async def _parse_toml(path: anyio.Path, /) -> dict[str, Incomplete] | None:
+        """Parse a ``ty.toml`` file."""
+        parsed = tomllib.loads(await path.read_text())
+        return dict(parsed) if parsed else None
+
+    @staticmethod
+    async def _parse_pyproject(path: anyio.Path, /) -> dict[str, Incomplete] | None:
+        """Parse ty config from ``[tool.ty]``."""
+        if (tool := await _parse_pyproject_tool(path)) is None:
+            return None
+        if not isinstance(ty := tool.get("ty"), dict):
+            return None
+        return dict(ty)
+
+
+_ty = TyConfig()
+
+
+async def ty_config(project_dir: StrPath, /) -> dict[str, Incomplete] | None:
+    """
+    Returns the ty config for the given project directory, or ``None``
+    if no config is found.
+
+    See https://docs.astral.sh/ty/configuration/
+    """
+    return await _ty.find(project_dir)
