@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
     from _typeshed import Incomplete, StrPath  # noqa: PLC2701
 
-__all__ = ("mypy_config", "pyrefly_config", "ty_config")
+__all__ = ("mypy_config", "pyrefly_config", "ty_config", "zuban_config")
 
 
 type _AsyncParser = Callable[[anyio.Path], Awaitable[dict[str, Incomplete] | None]]
@@ -264,3 +264,38 @@ async def ty_config(project_dir: StrPath, /) -> dict[str, Incomplete] | None:
     See https://docs.astral.sh/ty/configuration/
     """
     return await _ty.find(project_dir)
+
+
+class ZubanConfig(TypecheckerConfig):
+    """
+    Discover and parse Zuban configuration.
+
+    See https://docs.zubanls.com/en/latest/usage.html#configuration
+    """
+
+    @property
+    @override
+    def _project_config_files(self) -> Sequence[tuple[str, _AsyncParser]]:
+        return (("pyproject.toml", self._parse_pyproject),)
+
+    @staticmethod
+    async def _parse_pyproject(path: anyio.Path, /) -> dict[str, Incomplete] | None:
+        """Parse Zuban config from ``[tool.zuban]``."""
+        if (tool := await _parse_pyproject_tool(path)) is None:
+            return None
+        if not isinstance(zuban := tool.get("zuban"), dict):
+            return None
+        return dict(zuban)
+
+
+_zuban = ZubanConfig()
+
+
+async def zuban_config(project_dir: StrPath, /) -> dict[str, Incomplete] | None:
+    """
+    Returns the Zuban config for the given project directory, or ``None``
+    if no config is found.
+
+    See https://docs.zubanls.com/en/latest/usage.html#configuration
+    """
+    return await _zuban.find(project_dir)
