@@ -7,7 +7,7 @@ A tool to analyze the type annotation coverage of Python projects on PyPI.
 
 ## Implementation details
 
-### Pipeline
+### High-level Pipeline
 
 For a given project:
 
@@ -36,6 +36,46 @@ For a given project:
     - supported type-checkers + strictness flags
       annotation kind (inline, bundled stubs, typeshed stubs, third-party stubs, etc)
 12. TODO: Export the statistics for use in a website/dashboard (e.g. json, csv, or sqlite)
+
+### Symbol collection
+
+Per-module (via `libcst`):
+
+- **Imports**: `import m`, `import m as a`, `from m import x`, `from m import x as a`
+- **Wildcard imports**: `from m import *`
+- **Explicit exports**: `__all__ = [...]` (list, tuple, or set literals)
+- **Dynamic exports**: `__all__ += other.__all__`
+  ([spec](https://typing.python.org/en/latest/spec/distributing.html#library-interface-public-and-private-symbols))
+- **Implicit re-exports**: `from m import x as x`, `import m as m`
+  ([spec](https://typing.python.org/en/latest/spec/distributing.html#import-conventions))
+- **Type aliases**: `X: TypeAlias = ...`, `type X = ...`, `X = TypeAliasType("X", ...)`
+- **Name aliases**: `X = Y` where `Y` is a local symbol (viz. type alias) or an imported name (viz.
+  import alias)
+- **Special typeforms** (excluded from symbols): `TypeVar`, `ParamSpec`, `TypeVarTuple`, `NewType`,
+  `TypedDict`, `namedtuple`
+- **Annotated variables**: `x: T` and `x: T = ...`
+- **Functions/methods**: full parameter signatures with `self`/`cls` inference
+- **Overloaded functions**: `@overload` signatures collected and merged
+- **Properties**: `@property` / `@cached_property` (return type used as annotation)
+- **Classes**: including nested attribute annotations
+- **Enum members**: auto-detected as `KNOWN` (via `Enum`/`IntEnum`/`StrEnum`/`Flag`/... bases)
+- **Type-ignore comments**: `# type: ignore[...]`, `# pyrefly:ignore[...]`, etc.
+- **`Annotated` unwrapping**: `Annotated[T, ...]` → `T`
+  ([spec](https://typing.python.org/en/latest/spec/qualifiers.html#annotated))
+- **Aliased typing imports**: `import typing as t` resolved via `QualifiedNameProvider`
+
+Cross-module (via topological import graph):
+
+- **Import graph**: `ruff analyze graph` with cycle detection, with/without `TYPE_CHECKING` branches
+- **Public symbol resolution**: follows imports across modules in topological order
+- **Private module re-exports**: symbols re-exported from `_private` modules via `__all__`
+- **Wildcard re-export expansion**: `from _internal import *` resolved to concrete symbols
+- **External vs unknown**: imported symbols from external packages marked `EXTERNAL`, not `UNKNOWN`,
+  and excluded from coverage denominator
+- **Stub file priority**: Import resolution prioritizes `.pyi` files over `.py`
+  ([spec](https://typing.python.org/en/latest/spec/distributing.html#import-resolution-ordering))
+- **`py.typed` detection**: `YES`, `NO`, `PARTIAL`, or `STUBS` (for `-stubs` packages)
+  ([spec](https://typing.python.org/en/latest/spec/distributing.html#packaging-type-information))
 
 ### Async IO
 
