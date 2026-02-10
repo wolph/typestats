@@ -327,9 +327,13 @@ class _SymbolResolver:
         exports: _SymbolMap = {}
         for name in sorted(export_names):
             sym = candidates.get(name) or wildcard_symbols.get(name)
-            if sym is not None:
+
+            # Prefer import resolution over UNKNOWN local candidates
+            if sym is not None and sym.type_ is not analyze.UNKNOWN:
                 exports[name] = sym
-            elif target := import_map.get(name):
+                continue
+
+            if target := import_map.get(name):
                 resolved = self._resolve_import(
                     name,
                     target,
@@ -337,6 +341,10 @@ class _SymbolResolver:
                 )
                 if resolved is not None:
                     exports[name] = resolved
+                    continue
+
+            if sym is not None:
+                exports[name] = sym
         return exports
 
     def resolve_all(self) -> None:

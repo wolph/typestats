@@ -224,3 +224,31 @@ def test_enum_members_are_known_with_alias() -> None:
     symbols = {symbol.name: symbol.type_ for symbol in module.symbols}
 
     assert symbols["Status.READY"] is KNOWN
+
+
+def test_assign_imported_name_is_import_alias() -> None:
+    """X = Never (imported) should become an import alias, not an UNKNOWN symbol."""
+    src = textwrap.dedent("""
+    from typing import Never
+
+    Complex64 = Never
+    """)
+    module = collect_symbols(src)
+    imports = dict(module.imports)
+    assert imports["Complex64"] == "typing.Never"
+    assert len(module.symbols) == 0
+
+
+def test_assign_local_name_is_type_alias() -> None:
+    """X = Y (locally defined) should become a type alias, not an UNKNOWN symbol."""
+    src = textwrap.dedent("""
+    from typing import TypeAlias
+
+    AnyInt8Array: TypeAlias = int
+    AnyByteArray = AnyInt8Array
+    """)
+    module = collect_symbols(src)
+    aliases = {a.name: str(a.value) for a in module.type_aliases}
+    assert "AnyByteArray" in aliases
+    assert aliases["AnyByteArray"] == "AnyInt8Array"
+    assert all(s.name != "AnyByteArray" for s in module.symbols)
