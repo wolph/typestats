@@ -59,6 +59,7 @@ Per-module (via `libcst`):
 - **Properties**: `@property` / `@cached_property` (return type used as annotation)
 - **Classes**: including nested attribute annotations
 - **Enum members**: auto-detected as `KNOWN` (via `Enum`/`IntEnum`/`StrEnum`/`Flag`/... bases)
+- **Dataclass / NamedTuple / TypedDict fields**: auto-detected as `KNOWN` (annotated by definition)
 - **Type-ignore comments**: `# type: ignore[...]`, `# pyrefly:ignore[...]`, etc.
 - **`Annotated` unwrapping**: `Annotated[T, ...]` → `T`
   ([spec](https://typing.python.org/en/latest/spec/qualifiers.html#annotated))

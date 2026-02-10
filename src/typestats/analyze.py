@@ -34,6 +34,13 @@ _ENUM_BASES: Final[frozenset[str]] = frozenset({
     "Flag",
     "IntFlag",
 })
+_KNOWN_ATTRS_BASES: Final[frozenset[str]] = frozenset({
+    "NamedTuple",
+    "TypedDict",
+})
+_DATACLASS_DECORATORS: Final[frozenset[str]] = frozenset({
+    "dataclass",
+})
 
 type TypeForm = _TypeMarker | Expr | Function | Class
 
@@ -259,6 +266,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
 
     _class_stack: Final[deque[str]]
     _enum_class_stack: Final[deque[bool]]
+    _known_attrs_class_stack: Final[deque[bool]]
     _function_depth: int
     _overload_map: defaultdict[str, list[Overload]]
     _added_functions: set[str]
@@ -270,6 +278,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         self.import_aliases = []
         self._class_stack = deque()
         self._enum_class_stack = deque()
+        self._known_attrs_class_stack = deque()
         self._function_depth = 0
         self._overload_map = defaultdict(list)
         self._added_functions = set()
@@ -310,6 +319,24 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
                     or get_full_name_for_node(base.value)
                 )
             ) and self._leaf_name(full_name) in _ENUM_BASES:
+                return True
+        return False
+
+    def _is_known_attrs_class(self, node: cst.ClassDef) -> bool:
+        for dec in node.decorators:
+            expr = dec.decorator
+            if isinstance(expr, cst.Call):
+                expr = expr.func
+            full_name = self._qualified_name(expr) or get_full_name_for_node(expr)
+            if full_name and self._leaf_name(full_name) in _DATACLASS_DECORATORS:
+                return True
+        for base in node.bases:
+            if (
+                full_name := (
+                    self._qualified_name(base.value)
+                    or get_full_name_for_node(base.value)
+                )
+            ) and self._leaf_name(full_name) in _KNOWN_ATTRS_BASES:
                 return True
         return False
 
@@ -423,6 +450,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
             self.symbols.append(Symbol(class_name, Class(class_name)))
         self._class_stack.append(class_name)
         self._enum_class_stack.append(self._is_enum_class(node))
+        self._known_attrs_class_stack.append(self._is_known_attrs_class(node))
 
         return True
 
@@ -432,6 +460,8 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
             self._class_stack.pop()
         if self._enum_class_stack:
             self._enum_class_stack.pop()
+        if self._known_attrs_class_stack:
+            self._known_attrs_class_stack.pop()
 
     @override
     def visit_FunctionDef(self, node: cst.FunctionDef) -> bool:
@@ -495,6 +525,11 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
             return
 
         if node.value is not None and self._is_special_typeform(node.value):
+            return
+
+        if self._known_attrs_class_stack and self._known_attrs_class_stack[-1]:
+            for name_node in _extract_names(node.target):
+                self._add(name_node, KNOWN)
             return
 
         for name_node in _extract_names(node.target):

@@ -252,3 +252,105 @@ def test_assign_local_name_is_type_alias() -> None:
     assert "AnyByteArray" in aliases
     assert aliases["AnyByteArray"] == "AnyInt8Array"
     assert all(s.name != "AnyByteArray" for s in module.symbols)
+
+
+def test_dataclass_attrs_are_known() -> None:
+    src = textwrap.dedent("""
+    from dataclasses import dataclass
+
+    @dataclass
+    class Point:
+        x: int
+        y: float
+    """)
+    module = collect_symbols(src)
+    symbols = {s.name: s.type_ for s in module.symbols}
+
+    assert symbols["Point.x"] is KNOWN
+    assert symbols["Point.y"] is KNOWN
+
+
+def test_dataclass_call_attrs_are_known() -> None:
+    src = textwrap.dedent("""
+    from dataclasses import dataclass
+
+    @dataclass(frozen=True)
+    class Point:
+        x: int
+        y: float
+    """)
+    module = collect_symbols(src)
+    symbols = {s.name: s.type_ for s in module.symbols}
+
+    assert symbols["Point.x"] is KNOWN
+    assert symbols["Point.y"] is KNOWN
+
+
+def test_dataclass_alias_attrs_are_known() -> None:
+    src = textwrap.dedent("""
+    import dataclasses
+
+    @dataclasses.dataclass
+    class Point:
+        x: int
+    """)
+    module = collect_symbols(src)
+    symbols = {s.name: s.type_ for s in module.symbols}
+
+    assert symbols["Point.x"] is KNOWN
+
+
+def test_namedtuple_attrs_are_known() -> None:
+    src = textwrap.dedent("""
+    from typing import NamedTuple
+
+    class Coord(NamedTuple):
+        x: int
+        y: int
+    """)
+    module = collect_symbols(src)
+    symbols = {s.name: s.type_ for s in module.symbols}
+
+    assert symbols["Coord.x"] is KNOWN
+    assert symbols["Coord.y"] is KNOWN
+
+
+def test_typeddict_attrs_are_known() -> None:
+    src = textwrap.dedent("""
+    from typing import TypedDict
+
+    class Config(TypedDict):
+        name: str
+        value: int
+    """)
+    module = collect_symbols(src)
+    symbols = {s.name: s.type_ for s in module.symbols}
+
+    assert symbols["Config.name"] is KNOWN
+    assert symbols["Config.value"] is KNOWN
+
+
+def test_typeddict_alias_attrs_are_known() -> None:
+    src = textwrap.dedent("""
+    import typing
+
+    class Config(typing.TypedDict):
+        name: str
+    """)
+    module = collect_symbols(src)
+    symbols = {s.name: s.type_ for s in module.symbols}
+
+    assert symbols["Config.name"] is KNOWN
+
+
+def test_regular_class_attrs_not_known() -> None:
+    """Annotated attrs in plain classes should keep their type expression."""
+    src = textwrap.dedent("""
+    class Foo:
+        x: int
+    """)
+    module = collect_symbols(src)
+    symbols = {s.name: s.type_ for s in module.symbols}
+
+    assert symbols["Foo.x"] is not KNOWN
+    assert str(symbols["Foo.x"]) == "int"
