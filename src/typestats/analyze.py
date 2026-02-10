@@ -255,6 +255,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
     module: Final[cst.Module]
     symbols: Final[list[Symbol]]
     type_aliases: Final[list[TypeAlias]]
+    import_aliases: Final[list[tuple[str, str]]]
 
     _class_stack: Final[deque[str]]
     _enum_class_stack: Final[deque[bool]]
@@ -266,6 +267,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         self.module = module
         self.symbols = []
         self.type_aliases = []
+        self.import_aliases = []
         self._class_stack = deque()
         self._enum_class_stack = deque()
         self._function_depth = 0
@@ -501,6 +503,40 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
                 Expr.from_expr(node.annotation.annotation, self._qualified_name),
             )
 
+    def _try_add_name_alias(self, node: cst.Assign) -> bool:
+        """Handle `X = some_name` as an import alias or type alias.
+
+        Returns True if handled.
+        """
+        if self._class_stack or not isinstance(node.value, (cst.Name, cst.Attribute)):
+            return False
+
+        names = self.get_metadata(QualifiedNameProvider, node.value, default=set())
+        if not names:
+            return False
+
+        imported = next(
+            (qn for qn in names if qn.source is QualifiedNameSource.IMPORT),
+            None,
+        )
+        if imported is not None:
+            for target in node.targets:
+                for name_node in _extract_names(target.target):
+                    self.import_aliases.append((name_node.value, imported.name))
+            return True
+
+        local = next(
+            (qn for qn in names if qn.source is QualifiedNameSource.LOCAL),
+            None,
+        )
+        if local is not None:
+            for target in node.targets:
+                for name_node in _extract_names(target.target):
+                    self._add_type_alias(name_node, node.value)
+            return True
+
+        return False
+
     @override
     def visit_Assign(self, node: cst.Assign) -> None:
         if self._function_depth != 0:
@@ -513,6 +549,9 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
             return
 
         if self._is_special_typeform(node.value):
+            return
+
+        if self._try_add_name_alias(node):
             return
 
         for target in node.targets:
@@ -653,7 +692,8 @@ def collect_symbols(
     )
 
     imports = (
-        {module: module for module in imports_visitor.module_imports}
+        dict(symbol_visitor.import_aliases)
+        | {module: module for module in imports_visitor.module_imports}
         | {alias: module for module, alias in imports_visitor.module_aliases.items()}
         | {
             obj: f"{module}.{obj}"
