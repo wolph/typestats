@@ -24,6 +24,22 @@ _logger: Final = logging.getLogger(__name__)
 _RE_INIT: Final = re.compile(r"^__init__\.pyi?$")
 _RE_STUBS_DIR: Final = re.compile(r"^(.+)-stubs$")
 
+# Directory names to exclude from analysis (tests, benchmarks, docs, etc.)
+_EXCLUDED_DIR_NAMES: Final[frozenset[str]] = frozenset({
+    ".spin",
+    "_examples",
+    "benchmarks",
+    "doc",
+    "docs",
+    "examples",
+    "tests",
+    "tools",
+})
+# File names to exclude from analysis.
+_EXCLUDED_FILE_NAMES: Final[frozenset[str]] = frozenset({
+    "conftest.py",
+})
+
 type _SymbolMap = dict[str, analyze.Symbol]
 
 
@@ -84,9 +100,41 @@ def _topo_sort_lenient(graph: dict[str, list[str]]) -> list[str]:
     return result
 
 
+def _is_excluded_path(path: str, /, *, prefix: str = "") -> bool:
+    """Check if a source path contains an excluded directory or file name.
+
+    When *prefix* is given, it is stripped before inspecting the remaining
+    path components so that the project directory itself does not trigger
+    false positives (e.g. a project stored under a ``tests/`` directory).
+    """
+    rel = path.removeprefix(prefix).lstrip("/")
+    parts = rel.split("/")
+    if parts[-1] in _EXCLUDED_FILE_NAMES:
+        return True
+    return bool(_EXCLUDED_DIR_NAMES.intersection(parts))
+
+
 async def _analyze_graph(project_dir: StrPath, /, *opts: str) -> dict[str, list[str]]:
     """Run `ruff analyze graph` and clean self/parent-package dependencies."""
     graph = await _ruff.analyze_graph(project_dir, *opts)
+
+    # Build both absolute and CWD-relative prefixes so we can strip the
+    # project directory from graph keys regardless of how ruff reports them.
+    abs_path = await anyio.Path(project_dir).resolve()
+    abs_prefix = str(abs_path).replace(os.sep, "/").rstrip("/") + "/"
+    try:
+        cwd = await anyio.Path.cwd()
+        rel = str(abs_path.relative_to(cwd)).replace(os.sep, "/")
+        rel_prefix = rel.rstrip("/") + "/"
+    except ValueError:
+        # project_dir is not under cwd; ruff will use absolute paths
+        rel_prefix = abs_prefix
+
+    def _excluded(path: str) -> bool:
+        return _is_excluded_path(
+            path,
+            prefix=abs_prefix if path.startswith("/") else rel_prefix,
+        )
 
     return {
         node: list(
@@ -100,10 +148,13 @@ async def _analyze_graph(project_dir: StrPath, /, *opts: str) -> dict[str, list[
                     or (node.count("/") >= dep.count("/") and "/__init__.py" in dep)
                     # remove .py deps that also have a .pyi counterpart
                     or (dep.endswith(".py") and dep + "i" in deps)
+                    # exclude test/benchmark/doc directories
+                    or _excluded(dep)
                 )
             ),
         )
         for node, deps in graph.items()
+        if not _excluded(node)
     }
 
 

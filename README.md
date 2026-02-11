@@ -72,6 +72,9 @@ Cross-module (via import graph):
   gracefully via best-effort topological sort and iterative fixed-point resolution
 - **Reachability filtering**: only files transitively reachable from public modules are parsed,
   skipping tests, benchmarks, and internal tooling
+- **Excluded directories and files**: the following directories are automatically excluded from
+  analysis: `.spin`, `_examples`, `benchmarks`, `doc`, `docs`, `examples`, `tests`, `tools`.
+  The file `conftest.py` is also excluded wherever it appears.
 - **Public symbol resolution**: follows imports across modules, iterating until convergence
 - **Private module re-exports**: symbols re-exported from `_private` modules via `__all__`
 - **Wildcard re-export expansion**: `from _internal import *` resolved to concrete symbols
