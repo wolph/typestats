@@ -460,6 +460,16 @@ async def collect_public_symbols(
 ) -> Mapping[anyio.Path, Sequence[analyze.Symbol]]:
     """Collect public, fully qualified symbols from a package by source path."""
     sources = list(await list_sources(project_dir))
+
+    # When both .py and .pyi exist for the same module, type-checkers only
+    # look at the .pyi stub.  Drop the .py counterparts to match that behaviour.
+    pyi_sources = frozenset(str(s) for s in sources if str(s).endswith(".pyi"))
+    sources = [
+        s
+        for s in sources
+        if not (str(s).endswith(".py") and str(s) + "i" in pyi_sources)
+    ]
+
     module_paths = sources_to_module_paths(sources)
 
     module_symbols = await _collect_module_symbols(module_paths)
