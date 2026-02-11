@@ -16,26 +16,27 @@ For a given project:
 3. TODO: If there exists a `types-{project}` or `{project}-stubs` package on PyPI, repeat steps
    1-2 for that package, and merge the stubs into the main package source tree.
 4. Compute the import graph using `ruff analyze graph`
-5. Topologically sort the import graph to get a linear order of `.py` and `.pyi` files
-6. For each file in sorted order, parse the file using `libcst`, and extract:
+5. Best-effort topological sort of the import graph (cycles are broken gracefully)
+6. Filter to files transitively reachable from public modules (skip tests, tools, etc.)
+7. For each reachable file, parse it using `libcst`, and extract:
    - all annotatable global symbols and their type annotations
    - the `__all__` exports (if defined)
    - imports and implicit re-exports (i.e. `from a import b as b`)
    - type aliases (`_: TypeAlias = ...` and `type _ = ...`)
    - type-ignore comments (`# (type|pyright|pyrefly|ty): ignore`)
    - overloaded functions/methods
-7. TODO: Inline type aliases where used in annotations (so we can determine the `Any`-ness)
-8. TODO: Unify `.py` and `.pyi` annotations for each symbol
-9. Filter out any of the non-public symbols (requires following imports)
-10. Collect the type-checker configs to see which strictness flags are used and which
+8. TODO: Inline type aliases where used in annotations (so we can determine the `Any`-ness)
+9. TODO: Unify `.py` and `.pyi` annotations for each symbol
+10. Resolve public symbols via iterative fixed-point (handles import cycles)
+11. Collect the type-checker configs to see which strictness flags are used and which
     type-checkers it supports (mypy, (based)pyright, pyrefly, ty, zuban)
-11. TODO: Compute various statistics:
+12. TODO: Compute various statistics:
     - coverage (% of public symbols annotated)
     - strict coverage (% of public symbols annotated without `Any`)
     - average overload ratio (function without overloads counts as 1 overload)
     - supported type-checkers + strictness flags
       annotation kind (inline, bundled stubs, typeshed stubs, third-party stubs, etc)
-12. TODO: Export the statistics for use in a website/dashboard (e.g. json, csv, or sqlite)
+13. TODO: Export the statistics for use in a website/dashboard (e.g. json, csv, or sqlite)
 
 ### Symbol collection
 
@@ -65,10 +66,13 @@ Per-module (via `libcst`):
   ([spec](https://typing.python.org/en/latest/spec/qualifiers.html#annotated))
 - **Aliased typing imports**: `import typing as t` resolved via `QualifiedNameProvider`
 
-Cross-module (via topological import graph):
+Cross-module (via import graph):
 
-- **Import graph**: `ruff analyze graph` with cycle detection, with/without `TYPE_CHECKING` branches
-- **Public symbol resolution**: follows imports across modules in topological order
+- **Import graph**: `ruff analyze graph` with/without `TYPE_CHECKING` branches; import cycles handled
+  gracefully via best-effort topological sort and iterative fixed-point resolution
+- **Reachability filtering**: only files transitively reachable from public modules are parsed,
+  skipping tests, benchmarks, and internal tooling
+- **Public symbol resolution**: follows imports across modules, iterating until convergence
 - **Private module re-exports**: symbols re-exported from `_private` modules via `__all__`
 - **Wildcard re-export expansion**: `from _internal import *` resolved to concrete symbols
 - **External vs unknown**: imported symbols from external packages marked `EXTERNAL`, not `UNKNOWN`,
