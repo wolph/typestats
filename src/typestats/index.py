@@ -1,10 +1,8 @@
 import enum
-import graphlib
 import logging
 import os
 import re
 from collections import defaultdict, deque
-from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 import anyio
@@ -29,38 +27,94 @@ _RE_STUBS_DIR: Final = re.compile(r"^(.+)-stubs$")
 type _SymbolMap = dict[str, analyze.Symbol]
 
 
+def _build_topo_data(
+    graph: dict[str, list[str]],
+) -> tuple[set[str], dict[str, int], defaultdict[str, set[str]]]:
+    """Build in-degree and dependents maps for topological sorting."""
+    all_nodes: set[str] = set(graph)
+    for deps in graph.values():
+        all_nodes.update(deps)
+
+    # Deduplicate so in_degree is consistent with the set-based dependents map
+    in_degree = {node: len(set(graph.get(node, ()))) for node in all_nodes}
+
+    dependents: defaultdict[str, set[str]] = defaultdict(set)
+    for node, deps in graph.items():
+        for dep in deps:
+            dependents[dep].add(node)
+
+    return all_nodes, in_degree, dependents
+
+
+def _topo_sort_lenient(graph: dict[str, list[str]]) -> list[str]:
+    """Best-effort topological sort that handles cycles gracefully.
+
+    Nodes without prerequisites are emitted first.  When a cycle prevents
+    progress, the cycle member with the fewest remaining prerequisites is
+    emitted next, effectively breaking the cycle.
+    """
+    all_nodes, in_degree, dependents = _build_topo_data(graph)
+
+    queue = deque(sorted(n for n in all_nodes if in_degree[n] == 0))
+    result: list[str] = []
+    processed: set[str] = set()
+
+    while len(processed) < len(all_nodes):
+        while queue:
+            node = queue.popleft()
+            if node in processed:
+                continue
+            processed.add(node)
+            result.append(node)
+            for dependent in dependents.get(node, ()):
+                if dependent not in processed:
+                    in_degree[dependent] -= 1
+                    if in_degree[dependent] == 0:
+                        queue.append(dependent)
+
+        # If stuck in a cycle, break it by picking the node with lowest in-degree
+        if len(processed) < len(all_nodes):
+            breaker = min(
+                (n for n in all_nodes if n not in processed),
+                key=lambda n: in_degree[n],
+            )
+            _logger.debug("Breaking import cycle at %s", breaker)
+            queue.append(breaker)
+
+    return result
+
+
+async def _analyze_graph(project_dir: StrPath, /, *opts: str) -> dict[str, list[str]]:
+    """Run `ruff analyze graph` and clean self/parent-package dependencies."""
+    graph = await _ruff.analyze_graph(project_dir, *opts)
+
+    return {
+        node: list(
+            dict.fromkeys(
+                dep
+                for dep in deps
+                if not (
+                    # break self-dependencies
+                    dep == node
+                    # break self/super package dependencies
+                    or (node.count("/") >= dep.count("/") and "/__init__.py" in dep)
+                    # remove .py deps that also have a .pyi counterpart
+                    or (dep.endswith(".py") and dep + "i" in deps)
+                )
+            ),
+        )
+        for node, deps in graph.items()
+    }
+
+
 async def list_sources(project_dir: StrPath, /) -> map[anyio.Path]:
     """
-    List all source files in the given project directory in topological order.
-    This ensures that dependencies are listed before the files that depend on them.
-    For example, if module `A` imports module `B`, then `B` will appear before `A` in
-    the list.
-
-    Raises:
-        graphlib.CycleError: if there is a cycle in the import graph.
+    List all source files in the given project directory in best-effort
+    topological order, so that dependencies are listed before the files that
+    depend on them.  Import cycles are broken at an arbitrary point.
     """
-    graph = await _ruff.analyze_graph(project_dir, "--type-checking-imports")
-    sorter = graphlib.TopologicalSorter(graph)
-
-    try:
-        sorter.prepare()
-    except graphlib.CycleError:
-        project_name = Path(project_dir).name
-        _logger.warning(
-            "[%s] Import cycle detected; retrying without TYPE_CHECKING imports",
-            project_name,
-        )
-        graph = await _ruff.analyze_graph(project_dir, "--no-type-checking-imports")
-        sorter = graphlib.TopologicalSorter(graph)
-
-        try:
-            sorter.prepare()
-        except graphlib.CycleError as e:
-            # TODO(@jorenham): automatically break the cycle,
-            _logger.exception("[%s] Import cycle detected: %r", project_name, e.args[1])
-            raise
-
-    return map(anyio.Path, sorter.static_order())
+    graph = await _analyze_graph(project_dir, "--type-checking-imports")
+    return map(anyio.Path, _topo_sort_lenient(graph))
 
 
 def sources_root(sources: Iterable[StrPath], /) -> anyio.Path:
@@ -184,7 +238,7 @@ async def _collect_module_symbols(
 
 
 class _SymbolResolver:
-    """Resolves public symbols across modules in topological order."""
+    """Resolves public symbols across modules via iterative fixed-point."""
 
     def __init__(
         self,
@@ -348,19 +402,37 @@ class _SymbolResolver:
         return exports
 
     def resolve_all(self) -> None:
-        """Resolve public exports for all modules."""
-        for module_path, entries in self._module_symbols.items():
-            is_public = _is_public_module(module_path)
-            for symbol_path in self._sources_by_module.get(module_path, ()):
-                exports = self._resolve_source(
-                    entries[symbol_path],
-                    is_private=not is_public,
-                )
-                self._resolved[module_path][symbol_path] = exports if is_public else {}
-                # Populate _resolved_union for downstream module lookups
-                union = self._resolved_union[module_path]
-                for name, symbol in exports.items():
-                    union.setdefault(name, symbol)
+        """Resolve public exports for all modules via iterative fixed-point.
+
+        Iterates until the resolved symbol map stabilises, allowing cycles
+        in the import graph to be resolved progressively.
+        """
+        for _ in range(len(self._module_symbols) + 1):
+            changed = False
+
+            for module_path, entries in self._module_symbols.items():
+                is_public = _is_public_module(module_path)
+                for symbol_path in self._sources_by_module.get(module_path, ()):
+                    exports = self._resolve_source(
+                        entries[symbol_path],
+                        is_private=not is_public,
+                    )
+                    self._resolved[module_path][symbol_path] = (
+                        exports if is_public else {}
+                    )
+                    # Update _resolved_union, upgrading UNKNOWN when possible
+                    union = self._resolved_union[module_path]
+                    for name, symbol in exports.items():
+                        existing = union.get(name)
+                        if existing is None or (
+                            existing.type_ is analyze.UNKNOWN
+                            and symbol.type_ is not analyze.UNKNOWN
+                        ):
+                            union[name] = symbol
+                            changed = True
+
+            if not changed:
+                break
 
     def public_symbols(
         self,
@@ -394,7 +466,7 @@ async def collect_public_symbols(
 
     path_to_mod = {path: mod for mod, paths in module_paths.items() for path in paths}
 
-    # Build module → paths mapping in topological order (single pass)
+    # Build module → paths mapping preserving source order
     sources_by_module: defaultdict[str, list[anyio.Path]] = defaultdict(list)
     for path in sources:
         mod = path_to_mod.get(path)
@@ -419,17 +491,17 @@ async def collect_public_symbols(
 
 @mainpy.main
 async def example() -> None:
+    import sys  # noqa: PLC0415
+
     import httpx  # noqa: PLC0415
 
     from typestats import _pypi  # noqa: PLC0415
 
+    package = sys.argv[1] if len(sys.argv) > 1 else "optype"
+
     async with anyio.TemporaryDirectory() as temp_dir:
         async with httpx.AsyncClient(http2=True) as client:
-            path, _detail = await _pypi.download_sdist_latest(
-                client,
-                "optype",
-                temp_dir,
-            )
+            path, _ = await _pypi.download_sdist_latest(client, package, temp_dir)
 
         public_symbols = await collect_public_symbols(path)
         for source_path, symbols in sorted(public_symbols.items()):
