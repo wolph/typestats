@@ -354,3 +354,39 @@ def test_regular_class_attrs_not_known() -> None:
 
     assert symbols["Foo.x"] is not KNOWN
     assert str(symbols["Foo.x"]) == "int"
+
+
+def test_assign_subscript_imported_is_type_alias() -> None:
+    """X = ImportedType[args] should become a type alias, not UNKNOWN."""
+    src = textwrap.dedent("""
+    from numpy import signedinteger
+    from numpy._typing import _8Bit, _16Bit
+
+    int8 = signedinteger[_8Bit]
+    int16 = signedinteger[_16Bit]
+    """)
+    module = collect_symbols(src)
+    aliases = {a.name: str(a.value) for a in module.type_aliases}
+    assert "int8" in aliases
+    assert aliases["int8"] == "signedinteger[_8Bit]"
+    assert "int16" in aliases
+    assert aliases["int16"] == "signedinteger[_16Bit]"
+    assert all(s.name not in {"int8", "int16"} for s in module.symbols)
+
+
+def test_assign_subscript_local_is_type_alias() -> None:
+    """X = LocalType[args] should become a type alias, not UNKNOWN."""
+    src = textwrap.dedent("""
+    from typing import Generic, TypeVar
+
+    T = TypeVar("T")
+
+    class MyGeneric(Generic[T]): ...
+
+    Alias = MyGeneric[int]
+    """)
+    module = collect_symbols(src)
+    aliases = {a.name: str(a.value) for a in module.type_aliases}
+    assert "Alias" in aliases
+    assert aliases["Alias"] == "MyGeneric[int]"
+    assert all(s.name != "Alias" for s in module.symbols)

@@ -538,15 +538,25 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
                 Expr.from_expr(node.annotation.annotation, self._qualified_name),
             )
 
-    def _try_add_name_alias(self, node: cst.Assign) -> bool:
-        """Handle `X = some_name` as an import alias or type alias.
+    def _try_add_name_alias(self, node: cst.Assign) -> bool:  # noqa: C901, PLR0912
+        """Handle `X = some_name` or `X = some_name[...]` as an import alias
+        or type alias.
 
         Returns True if handled.
         """
-        if self._class_stack or not isinstance(node.value, (cst.Name, cst.Attribute)):
+        if self._class_stack:
             return False
 
-        names = self.get_metadata(QualifiedNameProvider, node.value, default=set())
+        value = node.value
+
+        # Unwrap subscript: `X = SomeType[args]` → resolve `SomeType`
+        is_subscript = isinstance(value, cst.Subscript)
+        base = value.value if is_subscript else value
+
+        if not isinstance(base, (cst.Name, cst.Attribute)):
+            return False
+
+        names = self.get_metadata(QualifiedNameProvider, base, default=set())
         if not names:
             return False
 
@@ -555,9 +565,15 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
             None,
         )
         if imported is not None:
-            for target in node.targets:
-                for name_node in _extract_names(target.target):
-                    self.import_aliases.append((name_node.value, imported.name))
+            if is_subscript:
+                # `X = ImportedType[args]` is a type alias, not a re-export
+                for target in node.targets:
+                    for name_node in _extract_names(target.target):
+                        self._add_type_alias(name_node, value)
+            else:
+                for target in node.targets:
+                    for name_node in _extract_names(target.target):
+                        self.import_aliases.append((name_node.value, imported.name))
             return True
 
         local = next(
@@ -567,7 +583,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         if local is not None:
             for target in node.targets:
                 for name_node in _extract_names(target.target):
-                    self._add_type_alias(name_node, node.value)
+                    self._add_type_alias(name_node, value)
             return True
 
         return False
