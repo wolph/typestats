@@ -1,11 +1,54 @@
 from pathlib import Path
 
 import anyio
+import pytest
 
 from typestats import analyze
-from typestats.index import collect_public_symbols, sources_to_module_paths
+from typestats.index import (
+    _is_excluded_path,
+    collect_public_symbols,
+    sources_to_module_paths,
+)
 
 _FIXTURES: Path = Path(__file__).parent / "fixtures"
+
+
+@pytest.mark.parametrize(
+    ("path", "prefix", "expected"),
+    [
+        # Paths within an sdist (no prefix needed)
+        ("numpy/_core/tests/test_abc.py", "", True),
+        ("numpy/tests/__init__.py", "", True),
+        ("benchmarks/bench_core.py", "", True),
+        ("benchmarks/benchmarks/bench_app.py", "", True),
+        ("doc/source/conf.py", "", True),
+        ("docs/conf.py", "", True),
+        ("tools/changelog.py", "", True),
+        ("examples/tutorial.py", "", True),
+        (".spin/cmds.py", "", True),
+        ("numpy/random/_examples/cffi/extending.py", "", True),
+        ("numpy/conftest.py", "", True),
+        ("conftest.py", "", True),
+        ("numpy/__init__.py", "", False),
+        ("numpy/_core/__init__.py", "", False),
+        ("numpy/linalg/__init__.pyi", "", False),
+        ("numpy/testing/__init__.pyi", "", False),
+        ("numpy/f2py/__init__.pyi", "", False),
+        # Prefix stripping: project under a tests/ directory should not match
+        (
+            "tests/fixtures/public_project/pkg/__init__.py",
+            "tests/fixtures/public_project/",
+            False,
+        ),
+        (
+            "tests/fixtures/public_project/pkg/a.py",
+            "tests/fixtures/public_project/",
+            False,
+        ),
+    ],
+)
+def test_is_excluded_path(path: str, prefix: str, expected: bool) -> None:
+    assert _is_excluded_path(path, prefix=prefix) == expected
 
 
 def _public_symbol_names(project_dir: Path) -> set[str]:
