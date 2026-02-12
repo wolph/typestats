@@ -43,6 +43,10 @@ _EXCLUDED_FILE_NAMES: Final[frozenset[str]] = frozenset({
 type _SymbolMap = dict[str, analyze.Symbol]
 
 
+def _is_public(name: str) -> bool:
+    return not name.startswith("_") or name.endswith("__")
+
+
 def _build_topo_data(
     graph: dict[str, list[str]],
 ) -> tuple[set[str], dict[str, int], defaultdict[str, set[str]]]:
@@ -136,23 +140,20 @@ async def _analyze_graph(project_dir: StrPath, /, *opts: str) -> dict[str, list[
             prefix=abs_prefix if path.startswith("/") else rel_prefix,
         )
 
-    return {
-        node: list(
-            dict.fromkeys(
-                dep
-                for dep in deps
-                if not (
-                    # break self-dependencies
-                    dep == node
-                    # break self/super package dependencies
-                    or (node.count("/") >= dep.count("/") and "/__init__.py" in dep)
-                    # remove .py deps that also have a .pyi counterpart
-                    or (dep.endswith(".py") and dep + "i" in deps)
-                    # exclude test/benchmark/doc directories
-                    or _excluded(dep)
-                )
-            ),
+    def _skip_dep(node: str, dep: str, deps: list[str]) -> bool:
+        return (
+            # break self-dependencies
+            dep == node
+            # break self/super package dependencies
+            or (node.count("/") >= dep.count("/") and "/__init__.py" in dep)
+            # remove .py deps that also have a .pyi counterpart
+            or (dep.endswith(".py") and dep + "i" in deps)
+            # exclude test/benchmark/doc directories
+            or _excluded(dep)
         )
+
+    return {
+        node: list(dict.fromkeys(dep for dep in deps if not _skip_dep(node, dep, deps)))
         for node, deps in graph.items()
         if not _excluded(node)
     }
@@ -416,16 +417,12 @@ class _SymbolResolver:
         elif is_private:
             # Without __all__, all non-private names available for re-export
             export_names = frozenset(
-                n
-                for n in {*candidates, *import_map}
-                if analyze.is_public(n) and n != "*"
+                n for n in {*candidates, *import_map} if _is_public(n) and n != "*"
             )
         else:
             # Without __all__, only local symbols and re-exports (PEP 484)
             export_names = frozenset(
-                n
-                for n in {*candidates, *symbols.exports_implicit}
-                if analyze.is_public(n)
+                n for n in {*candidates, *symbols.exports_implicit} if _is_public(n)
             )
 
         has_explicit_exports = symbols.exports_explicit is not None or is_private
