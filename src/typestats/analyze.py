@@ -2,18 +2,23 @@ import re
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING, Final, Literal, Self, override
+from typing import TYPE_CHECKING, Final, Literal, NamedTuple, Self, override
 
 import libcst as cst
 import mainpy
 from libcst.codemod import CodemodContext
 from libcst.codemod.visitors import GatherExportsVisitor, GatherImportsVisitor
 from libcst.helpers import get_full_name_for_node
-from libcst.metadata import MetadataWrapper, QualifiedNameProvider, QualifiedNameSource
+from libcst.metadata import (
+    MetadataWrapper,
+    QualifiedName,
+    QualifiedNameProvider,
+    QualifiedNameSource,
+)
 
 if TYPE_CHECKING:
     import types
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Collection, Mapping
 
 __all__ = (
     "IgnoreComment",
@@ -22,7 +27,6 @@ __all__ = (
     "TypeAlias",
     "TypeForm",
     "collect_symbols",
-    "is_public",
 )
 
 _EMPTY_MODULE: Final[cst.Module] = cst.Module([])
@@ -34,12 +38,16 @@ _ENUM_BASES: Final[frozenset[str]] = frozenset({
     "Flag",
     "IntFlag",
 })
-_KNOWN_ATTRS_BASES: Final[frozenset[str]] = frozenset({
-    "NamedTuple",
+_KNOWN_ATTRS_BASES: Final[frozenset[str]] = frozenset({"NamedTuple", "TypedDict"})
+_DATACLASS_DECORATORS: Final[frozenset[str]] = frozenset({"dataclass"})
+_SPECIAL_TYPEFORMS: Final[frozenset[str]] = frozenset({
+    "namedtuple",
+    "NewType",
+    "ParamSpec",
+    "TypeAliasType",
     "TypedDict",
-})
-_DATACLASS_DECORATORS: Final[frozenset[str]] = frozenset({
-    "dataclass",
+    "TypeVar",
+    "TypeVarTuple",
 })
 
 type TypeForm = _TypeMarker | Expr | Function | Class
@@ -79,6 +87,8 @@ UNKNOWN: Final[_UnknownType] = _TypeMarker.UNKNOWN
 KNOWN: Final[_KnownType] = _TypeMarker.KNOWN
 EXTERNAL: Final[_ExternalType] = _TypeMarker.EXTERNAL
 
+type _NameResolver = Callable[[cst.CSTNode], str | None]
+
 
 @dataclass(frozen=True, slots=True)
 class Expr:
@@ -92,7 +102,7 @@ class Expr:
     def from_annotation(
         cls,
         annotation: cst.Annotation | None,
-        name_resolver: Callable[[cst.CSTNode], str | None] | None = None,
+        name_resolver: _NameResolver | None = None,
     ) -> Self | _UnknownType:
         return (
             cls.from_expr(annotation.annotation, name_resolver)
@@ -104,7 +114,7 @@ class Expr:
     def from_expr(
         cls,
         expr: cst.BaseExpression,
-        name_resolver: Callable[[cst.CSTNode], str | None] | None = None,
+        name_resolver: _NameResolver | None = None,
     ) -> Self:
         return cls(_unwrap_annotated(expr, name_resolver))
 
@@ -205,10 +215,6 @@ class ModuleSymbols:
     ignore_comments: tuple[IgnoreComment, ...]
 
 
-def is_public(name: str) -> bool:
-    return not name.startswith("_") or name.endswith("__")
-
-
 def _extract_names(expr: cst.BaseExpression) -> list[cst.Name]:
     match expr:
         case cst.Name():
@@ -223,18 +229,22 @@ def _extract_names(expr: cst.BaseExpression) -> list[cst.Name]:
             return []
 
 
+def _leaf_name(name: str) -> str:
+    return name.rsplit(".", 1)[-1]
+
+
 def _unwrap_annotated(
     expr: cst.BaseExpression,
-    name_resolver: Callable[[cst.CSTNode], str | None] | None = None,
+    name_resolver: _NameResolver | None = None,
 ) -> cst.BaseExpression:
     current = expr
     while isinstance(current, cst.Subscript):
-        full_name = name_resolver(current.value) if name_resolver else None
+        value = current.value
+        full_name = name_resolver(value) if name_resolver else None
         if full_name is None:
-            full_name = get_full_name_for_node(current.value)
-        if full_name is None or full_name.rsplit(".", 1)[-1] != "Annotated":
+            full_name = get_full_name_for_node(value)
+        if full_name is None or _leaf_name(full_name) != "Annotated":
             break
-
         if not current.slice:
             break
 
@@ -246,27 +256,21 @@ def _unwrap_annotated(
     return current
 
 
+class _ClassStackItem(NamedTuple):
+    name: str
+    is_enum: bool
+    is_known_attrs: bool
+
+
 class _SymbolVisitor(cst.BatchableCSTVisitor):
     METADATA_DEPENDENCIES = (QualifiedNameProvider,)
-    _TYPEFORMS: Final[frozenset[str]] = frozenset({
-        "namedtuple",
-        "NewType",
-        "ParamSpec",
-        "TypeAliasType",
-        "TypedDict",
-        "TypeVar",
-        "TypeVarTuple",
-    })
-    _TYPEALIAS_VALUE_INDEX: Final[int] = 1
 
     module: Final[cst.Module]
     symbols: Final[list[Symbol]]
     type_aliases: Final[list[TypeAlias]]
     import_aliases: Final[list[tuple[str, str]]]
 
-    _class_stack: Final[deque[str]]
-    _enum_class_stack: Final[deque[bool]]
-    _known_attrs_class_stack: Final[deque[bool]]
+    _class_stack: Final[deque[_ClassStackItem]]
     _function_depth: int
     _overload_map: defaultdict[str, list[Overload]]
     _added_functions: set[str]
@@ -277,96 +281,65 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         self.type_aliases = []
         self.import_aliases = []
         self._class_stack = deque()
-        self._enum_class_stack = deque()
-        self._known_attrs_class_stack = deque()
         self._function_depth = 0
         self._overload_map = defaultdict(list)
         self._added_functions = set()
 
+    def _get_qualified_names(self, node: cst.CSTNode) -> Collection[QualifiedName]:
+        return self.get_metadata(QualifiedNameProvider, node, default=set())
+
     def _qualified_name(self, node: cst.CSTNode) -> str | None:
-        names = self.get_metadata(QualifiedNameProvider, node, default=set())
-        if not names:
+        if not (names := self._get_qualified_names(node)):
             return None
 
-        preferred = next(
-            (qn for qn in names if qn.source is not QualifiedNameSource.LOCAL),
-            None,
-        )
-        return (preferred or next(iter(names))).name
+        for qn in names:
+            if qn.source is not QualifiedNameSource.LOCAL:
+                return qn.name
 
-    @staticmethod
-    def _display_from_qualified(qualified: str) -> str:
-        parts = qualified.split(".")
-        return ".".join(parts[1:]) if len(parts) > 1 else qualified
+        return next(iter(names)).name
 
-    def _display_name_for(self, node: cst.CSTNode, fallback: str) -> str:
-        qualified = self._qualified_name(node)
-        if qualified is None:
-            return fallback
-        return self._display_from_qualified(qualified)
+    def _full_name(self, node: cst.CSTNode) -> str | None:
+        return self._qualified_name(node) or get_full_name_for_node(node)
 
-    def _display_name(self, name_node: cst.Name) -> str:
-        return self._display_name_for(name_node, name_node.value)
+    def _symbol_name(self, node: cst.Name) -> str:
+        if qualified := self._qualified_name(node):
+            name = qualified.split(".", 1)[-1]
+        else:
+            name = node.value
 
-    def _class_display_name(self, node: cst.ClassDef) -> str:
-        return self._display_name_for(node, node.name.value)
+        if self._class_stack and not self._function_depth and "." not in name:
+            name = f"{self._class_stack[-1].name}.{name}"
+        return name
+
+    def _is_name_in(self, node: cst.CSTNode, haystack: Collection[str]) -> bool:
+        full_name = self._full_name(node)
+        return full_name is not None and _leaf_name(full_name) in haystack
 
     def _is_enum_class(self, node: cst.ClassDef) -> bool:
-        for base in node.bases:
-            if (
-                full_name := (
-                    self._qualified_name(base.value)
-                    or get_full_name_for_node(base.value)
-                )
-            ) and self._leaf_name(full_name) in _ENUM_BASES:
-                return True
-        return False
+        return any(self._is_name_in(base.value, _ENUM_BASES) for base in node.bases)
 
     def _is_known_attrs_class(self, node: cst.ClassDef) -> bool:
         for dec in node.decorators:
             expr = dec.decorator
             if isinstance(expr, cst.Call):
                 expr = expr.func
-            full_name = self._qualified_name(expr) or get_full_name_for_node(expr)
-            if full_name and self._leaf_name(full_name) in _DATACLASS_DECORATORS:
-                return True
-        for base in node.bases:
-            if (
-                full_name := (
-                    self._qualified_name(base.value)
-                    or get_full_name_for_node(base.value)
-                )
-            ) and self._leaf_name(full_name) in _KNOWN_ATTRS_BASES:
-                return True
-        return False
 
-    def _symbol_name(self, name_node: cst.Name) -> str:
-        name = self._display_name(name_node)
-        if self._class_stack and self._function_depth == 0 and "." not in name:
-            name = f"{self._class_stack[-1]}.{name}"
-        return name
+            if self._is_name_in(expr, _DATACLASS_DECORATORS):
+                return True
 
-    @staticmethod
-    def _leaf_name(name: str) -> str:
-        return name.rsplit(".", 1)[-1]
+        return any(
+            self._is_name_in(base.value, _KNOWN_ATTRS_BASES) for base in node.bases
+        )
 
     def _is_typealias_annotation(self, annotation: cst.Annotation) -> bool:
-        full_name = self._qualified_name(annotation.annotation)
-        if full_name is None:
-            full_name = get_full_name_for_node(annotation.annotation)
-        return full_name is not None and self._leaf_name(full_name) == "TypeAlias"
+        full_name = self._full_name(annotation.annotation)
+        return full_name is not None and _leaf_name(full_name) == "TypeAlias"
 
     def _is_special_typeform(self, expr: cst.BaseExpression) -> bool:
         if not isinstance(expr, cst.Call):
             return False
 
-        full_name = self._qualified_name(expr.func)
-        if full_name is None:
-            full_name = get_full_name_for_node(expr.func)
-        if full_name is None:
-            return False
-
-        return self._leaf_name(full_name) in self._TYPEFORMS
+        return self._is_name_in(expr.func, _SPECIAL_TYPEFORMS)
 
     def _typealias_value_from_call(
         self,
@@ -375,15 +348,13 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         if not isinstance(expr, cst.Call):
             return None
 
-        full_name = self._qualified_name(expr.func)
-        if full_name is None:
-            full_name = get_full_name_for_node(expr.func)
-        if full_name is None or self._leaf_name(full_name) != "TypeAliasType":
+        full_name = self._full_name(expr.func)
+        if full_name is None or _leaf_name(full_name) != "TypeAliasType":
             return None
 
         positional_args = [arg for arg in expr.args if arg.keyword is None]
-        if len(positional_args) > self._TYPEALIAS_VALUE_INDEX:
-            return positional_args[self._TYPEALIAS_VALUE_INDEX].value
+        if len(positional_args) > 1:
+            return positional_args[1].value
 
         for arg in expr.args:
             if arg.keyword and arg.keyword.value == "value":
@@ -392,12 +363,12 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         return None
 
     def _add_type_alias(self, name_node: cst.Name, value: cst.BaseExpression) -> None:
-        name = self._symbol_name(name_node)
-
-        if is_public(self._leaf_name(name)):
-            self.type_aliases.append(
-                TypeAlias(name, Expr.from_expr(value, self._qualified_name)),
-            )
+        self.type_aliases.append(
+            TypeAlias(
+                self._symbol_name(name_node),
+                Expr.from_expr(value, self._qualified_name),
+            ),
+        )
 
     def _param(
         self,
@@ -406,15 +377,13 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         known_name: str | None = None,
     ) -> Param:
         if known_name and not param.annotation and param.name.value == known_name:
-            annotation = KNOWN
+            ty = KNOWN
         else:
-            annotation = Expr.from_annotation(param.annotation, self._qualified_name)
-        return Param(param.name.value, kind, annotation)
+            ty = Expr.from_annotation(param.annotation, self._qualified_name)
+        return Param(param.name.value, kind, ty)
 
-    def _add(self, name_node: cst.Name, annotation: TypeForm) -> None:
-        name = self._symbol_name(name_node)
-        if is_public(self._leaf_name(name)):
-            self.symbols.append(Symbol(name, annotation))
+    def _add_symbol(self, name_node: cst.Name, annotation: TypeForm) -> None:
+        self.symbols.append(Symbol(self._symbol_name(name_node), annotation))
 
     def _callable_signature(
         self,
@@ -442,60 +411,59 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
 
     @override
     def visit_ClassDef(self, node: cst.ClassDef) -> bool:
-        if self._function_depth != 0:
+        if self._function_depth:
             return False
 
-        class_name = self._class_display_name(node)
-        if is_public(self._leaf_name(class_name)):
-            self.symbols.append(Symbol(class_name, Class(class_name)))
-        self._class_stack.append(class_name)
-        self._enum_class_stack.append(self._is_enum_class(node))
-        self._known_attrs_class_stack.append(self._is_known_attrs_class(node))
+        name = node.name.value
+        self.symbols.append(Symbol(name, Class(name)))
+        self._class_stack.append(
+            _ClassStackItem(
+                name,
+                self._is_enum_class(node),
+                self._is_known_attrs_class(node),
+            ),
+        )
 
         return True
 
     @override
     def leave_ClassDef(self, original_node: cst.ClassDef) -> None:
-        if self._class_stack:
-            self._class_stack.pop()
-        if self._enum_class_stack:
-            self._enum_class_stack.pop()
-        if self._known_attrs_class_stack:
-            self._known_attrs_class_stack.pop()
+        if stack := self._class_stack:
+            stack.pop()
 
     @override
     def visit_FunctionDef(self, node: cst.FunctionDef) -> bool:
         if self._function_depth == 0:
             decorators = {
-                self._leaf_name(full)
+                _leaf_name(full)
                 for dec in node.decorators
                 if (full := get_full_name_for_node(dec.decorator))
             }
             name = self._symbol_name(node.name)
 
             if self._class_stack and "staticmethod" not in decorators:
+                # TODO(@jorenham): don't rely on name-based heuristic for self/cls
                 known_name = "cls" if "classmethod" in decorators else "self"
             else:
                 known_name = None
 
-            if is_public(self._leaf_name(name)):
-                if "overload" in decorators:
-                    self._overload_map[name].append(
-                        self._callable_signature(node, known_name),
-                    )
-                elif "property" in decorators or "cached_property" in decorators:
-                    self._add(
-                        node.name,
-                        Expr.from_annotation(node.returns, self._qualified_name),
-                    )
+            if "overload" in decorators:
+                self._overload_map[name].append(
+                    self._callable_signature(node, known_name),
+                )
+            elif "property" in decorators or "cached_property" in decorators:
+                self._add_symbol(
+                    node.name,
+                    Expr.from_annotation(node.returns, self._qualified_name),
+                )
+            else:
+                if overload_list := self._overload_map.pop(name, None):
+                    overloads = overload_list[0], *overload_list[1:]
                 else:
-                    if overload_list := self._overload_map.pop(name, None):
-                        overloads = overload_list[0], *overload_list[1:]
-                    else:
-                        overloads = (self._callable_signature(node, known_name),)
+                    overloads = (self._callable_signature(node, known_name),)
 
-                    self.symbols.append(Symbol(name, Function(name, overloads)))
-                    self._added_functions.add(name)
+                self.symbols.append(Symbol(name, Function(name, overloads)))
+                self._added_functions.add(name)
 
         self._function_depth += 1
         return True
@@ -506,39 +474,36 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
 
     @override
     def leave_Module(self, original_node: cst.Module) -> None:
+        added_functions = self._added_functions
         for name, overloads in self._overload_map.items():
-            if name in self._added_functions or not is_public(self._leaf_name(name)):
-                continue
-
-            self.symbols.append(
-                Symbol(name, Function(name, (overloads[0], *overloads[1:]))),
-            )
+            if name not in added_functions:
+                self.symbols.append(
+                    Symbol(name, Function(name, (overloads[0], *overloads[1:]))),
+                )
 
     @override
     def visit_AnnAssign(self, node: cst.AnnAssign) -> None:
         if self._function_depth != 0:
             return
 
-        if node.value is not None and self._is_typealias_annotation(node.annotation):
-            for name_node in _extract_names(node.target):
-                self._add_type_alias(name_node, node.value)
-            return
+        if node.value is not None:
+            if self._is_typealias_annotation(node.annotation):
+                for name_node in _extract_names(node.target):
+                    self._add_type_alias(name_node, node.value)
+                return
 
-        if node.value is not None and self._is_special_typeform(node.value):
-            return
+            if self._is_special_typeform(node.value):
+                return
 
-        if self._known_attrs_class_stack and self._known_attrs_class_stack[-1]:
-            for name_node in _extract_names(node.target):
-                self._add(name_node, KNOWN)
-            return
+        if self._class_stack and self._class_stack[-1].is_known_attrs:
+            ty = KNOWN
+        else:
+            ty = Expr.from_expr(node.annotation.annotation, self._qualified_name)
 
         for name_node in _extract_names(node.target):
-            self._add(
-                name_node,
-                Expr.from_expr(node.annotation.annotation, self._qualified_name),
-            )
+            self._add_symbol(name_node, ty)
 
-    def _try_add_name_alias(self, node: cst.Assign) -> bool:  # noqa: C901, PLR0912
+    def _try_add_name_alias(self, node: cst.Assign) -> bool:  # noqa: C901
         """Handle `X = some_name` or `X = some_name[...]` as an import alias
         or type alias.
 
@@ -556,8 +521,8 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         if not isinstance(base, (cst.Name, cst.Attribute)):
             return False
 
-        names = self.get_metadata(QualifiedNameProvider, base, default=set())
-        if not names:
+        if not (names := self._get_qualified_names(base)):
+            # no qualified names; not an alias
             return False
 
         imported = next(
@@ -565,14 +530,12 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
             None,
         )
         if imported is not None:
-            if is_subscript:
-                # `X = ImportedType[args]` is a type alias, not a re-export
-                for target in node.targets:
-                    for name_node in _extract_names(target.target):
+            for target in node.targets:
+                for name_node in _extract_names(target.target):
+                    if is_subscript:
+                        # `X = ImportedType[args]` is a type alias, not a re-export
                         self._add_type_alias(name_node, value)
-            else:
-                for target in node.targets:
-                    for name_node in _extract_names(target.target):
+                    else:
                         self.import_aliases.append((name_node.value, imported.name))
             return True
 
@@ -590,7 +553,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
 
     @override
     def visit_Assign(self, node: cst.Assign) -> None:
-        if self._function_depth != 0:
+        if self._function_depth:
             return
 
         if typealias_value := self._typealias_value_from_call(node.value):
@@ -605,16 +568,15 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         if self._try_add_name_alias(node):
             return
 
+        # enum attributes are considered KNOWN
+        ty = KNOWN if self._class_stack and self._class_stack[-1].is_enum else UNKNOWN
         for target in node.targets:
             for name_node in _extract_names(target.target):
-                if self._class_stack and self._enum_class_stack[-1]:
-                    self._add(name_node, KNOWN)
-                else:
-                    self._add(name_node, UNKNOWN)
+                self._add_symbol(name_node, ty)
 
     @override
     def visit_TypeAlias(self, node: cst.TypeAlias) -> None:
-        if self._function_depth == 0:
+        if not self._function_depth:
             self._add_type_alias(node.name, node.value)
 
 
@@ -665,20 +627,21 @@ class _ExportsVisitor(GatherExportsVisitor, cst.BatchableCSTVisitor):
         if self._is_all_target(node.target):
             self.has_explicit_all = True
             # Detect __all__ += X.__all__ pattern
-            value = node.value
             if (
-                isinstance(value, cst.Attribute)
+                isinstance(value := node.value, cst.Attribute)
                 and isinstance(value.attr, cst.Name)
                 and value.attr.value == "__all__"
+                and (source_name := get_full_name_for_node(value.value))
             ):
-                source_name = get_full_name_for_node(value.value)
-                if source_name:
-                    self.all_sources.append(source_name)
+                self.all_sources.append(source_name)
         return super().visit_AugAssign(node)
 
     @override
     def visit_Assign(self, node: cst.Assign) -> bool:
-        if any(self._is_all_target(target.target) for target in node.targets):
+        if (
+            not self.has_explicit_all
+            and any(self._is_all_target(target.target) for target in node.targets)
+        ):  # fmt: skip
             self.has_explicit_all = True
         return super().visit_Assign(node)
 
@@ -713,11 +676,7 @@ class _TypeIgnoreVisitor(cst.BatchableCSTVisitor):
         if node.comment is None:
             return
 
-        comment = node.comment.value
-        matches = list(self._TYPE_IGNORE_RE.finditer(comment))
-        if not matches:
-            return
-        for match in matches:
+        for match in self._TYPE_IGNORE_RE.finditer(node.comment.value):
             rules = match.group(2)
             if rules is not None:
                 rules = frozenset(r.strip() for r in rules.split(",") if r.strip())
@@ -738,9 +697,12 @@ def collect_symbols(
         CodemodContext(full_package_name=package_name or ""),
     )
     type_ignore_visitor = _TypeIgnoreVisitor()
-    wrapper.visit_batched(
-        [symbol_visitor, exports_visitor, imports_visitor, type_ignore_visitor],
-    )
+    wrapper.visit_batched([
+        symbol_visitor,
+        exports_visitor,
+        imports_visitor,
+        type_ignore_visitor,
+    ])
 
     imports = (
         dict(symbol_visitor.import_aliases)
