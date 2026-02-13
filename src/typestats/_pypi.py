@@ -1,20 +1,25 @@
 import io
 import logging
 import tarfile
+import zipfile
 from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, TypedDict
 
 import anyio
 import anyio.to_thread
 import httpx
 import mainpy
-from packaging.utils import parse_sdist_filename
+from packaging.utils import parse_sdist_filename, parse_wheel_filename
 from yarl import URL
 
 if TYPE_CHECKING:
     from _typeshed import StrPath
 
 
-__all__ = "download_sdist", "download_sdist_latest", "fetch_project_detail"
+__all__ = "download_package", "download_package_latest", "fetch_project_detail"
+
+
+class _NoDistributionFoundError(Exception):
+    """No suitable distribution (sdist or wheel) found."""
 
 
 HOST: Final = URL("https://files.pythonhosted.org")
@@ -105,24 +110,66 @@ async def fetch_project_detail(
 
 
 def _latest_sdist(details: ProjectDetail, /) -> FileDetail:
-    """Finds the latest sdist from the given project detail."""
+    """Finds the latest sdist from the given project detail.
 
-    # we only return the URL, which contains the version
+    Raises:
+        _NoDistributionFoundError: If no sdist is found.
+    """
     sdists = [
         sdist
         for sdist in details["files"]
-        if (sdist["filename"].endswith((".tar.gz", ".zip")))
+        if sdist["filename"].endswith((".tar.gz", ".zip"))
         and not sdist.get("yanked", False)
     ]
-
+    if not sdists:
+        msg = "No sdist found"
+        raise _NoDistributionFoundError(msg)
     return max(sdists, key=lambda sdist: parse_sdist_filename(sdist["filename"])[1])
 
 
-async def _sdist_extract(content: bytes, out_dir: anyio.Path, /) -> None:
+def _latest_wheel(details: ProjectDetail, /) -> FileDetail:
+    """Finds the latest wheel from the given project detail.
+
+    Raises:
+        _NoDistributionFoundError: If no wheel is found.
     """
-    Async version of `with tarfile.open(...) as tar: tar.extractall(out_dir)` for
-    raw bytes.
-    """
+    wheels = [
+        w
+        for w in details["files"]
+        if w["filename"].endswith(".whl") and not w.get("yanked", False)
+    ]
+    if not wheels:
+        msg = "No wheel found"
+        raise _NoDistributionFoundError(msg)
+    # Prefer pure-Python wheels (none-any)
+    pure = [
+        w
+        for w in wheels
+        if all(
+            tag.abi == "none" and tag.platform == "any"
+            for tag in parse_wheel_filename(w["filename"])[3]
+        )
+    ]
+    candidates = pure or wheels
+    return max(
+        candidates,
+        key=lambda w: parse_wheel_filename(w["filename"])[1],
+    )
+
+
+def _latest_distribution(
+    details: ProjectDetail,
+    /,
+) -> tuple[FileDetail, Literal["sdist", "wheel"]]:
+    """Try sdist first, fall back to wheel."""
+    try:
+        return _latest_sdist(details), "sdist"
+    except _NoDistributionFoundError:
+        return _latest_wheel(details), "wheel"
+
+
+async def _tar_extract(content: bytes, out_dir: anyio.Path, /) -> None:
+    """Extract a `.tar.gz` archive asynchronously."""
 
     def _extract() -> None:
         with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as tar:
@@ -131,47 +178,76 @@ async def _sdist_extract(content: bytes, out_dir: anyio.Path, /) -> None:
     await anyio.to_thread.run_sync(_extract)
 
 
-async def download_sdist(
+async def _zip_extract(content: bytes, out_dir: anyio.Path, /) -> None:
+    """Extract a `.zip` archive asynchronously."""
+
+    def _extract() -> None:
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            zf.extractall(path=out_dir)  # noqa: S202
+
+    await anyio.to_thread.run_sync(_extract)
+
+
+async def download_package(
     client: httpx.AsyncClient,
-    sdist: FileDetail,
+    file_detail: FileDetail,
     out_dir: StrPath,
     /,
 ) -> anyio.Path:
-    """
-    Download and extract the given sdist file (if not already present) and return its
-    path.
+    """Download and extract a package file (sdist or wheel) and return its path.
+
+    Raises:
+        ValueError: If the file type is unsupported.
     """
     out_dir = await anyio.Path(out_dir).resolve()
     await out_dir.mkdir(parents=True, exist_ok=True)
 
-    target_path = out_dir / sdist["filename"].removesuffix(".tar.gz")
+    filename = file_detail["filename"]
+    if filename.endswith(".tar.gz"):
+        target_name = filename.removesuffix(".tar.gz")
+        extract = _tar_extract
+    elif filename.endswith(".zip"):
+        target_name = filename.removesuffix(".zip")
+        extract = _zip_extract
+    elif filename.endswith(".whl"):
+        target_name = filename.removesuffix(".whl")
+        extract = _zip_extract
+    else:
+        msg = f"Unsupported file type: {filename}"
+        raise ValueError(msg)
+
+    target_path = out_dir / target_name
     if not await target_path.is_dir():
-        response = await client.get(sdist["url"])
+        response = await client.get(file_detail["url"])
         response.raise_for_status()
 
-        await _sdist_extract(response.content, out_dir)
-        _logger.info("Extracted %s into %s", sdist["filename"], target_path)
+        await extract(response.content, out_dir)
+        _logger.info("Extracted %s into %s", filename, target_path)
 
     return target_path
 
 
-async def download_sdist_latest(
+async def download_package_latest(
     client: httpx.AsyncClient,
     project_name: str,
     out_dir: StrPath,
     /,
 ) -> tuple[anyio.Path, FileDetail]:
     """
-    Download and extract the latest sdist for the given project name and return its
-    path.
+    Download and extract the latest package (sdist or wheel) for the given
+    project name and return its path.
+
+    Returns:
+        A ``(path, file_detail)`` tuple where *path* is the extracted
+        directory and *file_detail* is the PyPI file metadata.
     """
     detail = await fetch_project_detail(client, project_name)
-    sdist = _latest_sdist(detail)
-    path = await download_sdist(client, sdist, out_dir)
-    return path, sdist
+    file_detail, _ = _latest_distribution(detail)
+    path = await download_package(client, file_detail, out_dir)
+    return path, file_detail
 
 
 @mainpy.main
 async def example() -> None:
     async with httpx.AsyncClient(http2=True) as client:
-        await download_sdist_latest(client, "optype", "./projects")
+        await download_package_latest(client, "optype", "./projects")

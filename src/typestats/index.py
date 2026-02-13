@@ -599,7 +599,7 @@ async def example() -> None:
     t0 = time.monotonic()
     async with anyio.TemporaryDirectory() as temp_dir:
         async with httpx.AsyncClient(http2=True) as client:
-            path, _ = await _pypi.download_sdist_latest(client, package, temp_dir)
+            path, _ = await _pypi.download_package_latest(client, package, temp_dir)
 
         public_symbols = await collect_public_symbols(path)
         for source_path, symbols in sorted(public_symbols.items()):
