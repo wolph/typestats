@@ -229,3 +229,20 @@ def test_collect_public_symbols_pyi_stub_types_not_unknown() -> None:
     assert "stubpkg.GenericType" in types
     assert types["stubpkg.AnnotatedAlias"] is not analyze.UNKNOWN
     assert types["stubpkg.GenericType"] is not analyze.UNKNOWN
+
+
+def test_collect_public_symbols_unresolved_all_names_unknown() -> None:
+    """Names in __all__ that can't be resolved should be UNKNOWN."""
+    types = _public_symbol_types(_FIXTURES / "public_project")
+
+    # spam is imported from _b and should be resolved normally
+    assert "pkg.lazy.spam" in types
+    assert types["pkg.lazy.spam"] is not analyze.UNKNOWN
+
+    # dynamic_a and dynamic_b are listed in __all__ but not defined
+    # anywhere resolvable, so they should be UNKNOWN
+    assert "pkg.lazy.dynamic_a" in types
+    assert types["pkg.lazy.dynamic_a"] is analyze.UNKNOWN
+
+    assert "pkg.lazy.dynamic_b" in types
+    assert types["pkg.lazy.dynamic_b"] is analyze.UNKNOWN
