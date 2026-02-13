@@ -4,9 +4,9 @@ build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-root = ""
-module-name = "pkg"
+module-name = ["pkg", "mylib", "optype", "mylib_pyi", "optype_pyi", "stubpkg"]
 
 [project]
-name = "public-project"
+name = "test-project"
 version = "0.1.0"
 requires-python = ">=3.14"

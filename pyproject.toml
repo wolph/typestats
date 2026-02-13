@@ -36,10 +36,7 @@ typestats = "typestats:__main__.app"
 [dependency-groups]
 test = [
   "pytest>=9.0.2",
-  "public-project",
-  "private-reexport",
-  "private-reexport-pyi",
-  "stub-typed-private",
+  "test-project",
 ]
 dev = [
   { include-group = "test" },
@@ -49,17 +46,11 @@ dev = [
 ]
 
 [tool.uv.sources]
-public-project = { workspace = true }
-private-reexport = { workspace = true }
-private-reexport-pyi = { workspace = true }
-stub-typed-private = { workspace = true }
+test-project = { workspace = true }
 
 [tool.uv.workspace]
 members = [
-  "tests/fixtures/public_project",
-  "tests/fixtures/private_reexport",
-  "tests/fixtures/private_reexport_pyi",
-  "tests/fixtures/stub_typed_private",
+  "tests/fixtures/project",
 ]
 
 # pytest
