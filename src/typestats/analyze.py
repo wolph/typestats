@@ -2,7 +2,7 @@ import re
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING, Final, Literal, NamedTuple, Self, override
+from typing import TYPE_CHECKING, Final, Literal, Self, override
 
 import libcst as cst
 import mainpy
@@ -97,10 +97,16 @@ def is_annotated(type_: TypeForm, /) -> bool:
     Returns ``False`` for ``UNKNOWN``, ``KNOWN``, ``EXTERNAL``, and for
     ``Function`` types where every parameter (other than *self*/*cls*) and
     the return type are ``UNKNOWN``.
+
+    For ``Class`` types, the class is only considered annotated when **all**
+    of its members (stored in ``Class.members``) are also annotated.
+    A class with no members is considered annotated.
     """
     match type_:
-        case Expr() | Class():
+        case Expr():
             return True
+        case Class(members=members):
+            return all(is_annotated(m) for m in members)
         case Function(overloads=overloads):
             return any(
                 overload.returns is not UNKNOWN
@@ -189,6 +195,7 @@ class Function:
 @dataclass(frozen=True, slots=True)
 class Class:
     name: str
+    members: tuple[TypeForm, ...] = ()
 
     @override
     def __str__(self) -> str:
@@ -280,10 +287,13 @@ def _unwrap_annotated(
     return current
 
 
-class _ClassStackItem(NamedTuple):
+@dataclass(slots=True)
+class _ClassStackItem:
     name: str
     is_enum: bool
     is_known_attrs: bool
+    symbol_index: int  # index into _SymbolVisitor.symbols where the Class symbol lives
+    members: list[TypeForm]
 
 
 class _SymbolVisitor(cst.BatchableCSTVisitor):
@@ -408,6 +418,8 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
 
     def _add_symbol(self, name_node: cst.Name, annotation: TypeForm) -> None:
         self.symbols.append(Symbol(self._symbol_name(name_node), annotation))
+        if self._class_stack and not self._function_depth:
+            self._class_stack[-1].members.append(annotation)
 
     def _callable_signature(
         self,
@@ -439,12 +451,15 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
             return False
 
         name = node.name.value
+        symbol_index = len(self.symbols)
         self.symbols.append(Symbol(name, Class(name)))
         self._class_stack.append(
             _ClassStackItem(
-                name,
-                self._is_enum_class(node),
-                self._is_known_attrs_class(node),
+                name=name,
+                is_enum=self._is_enum_class(node),
+                is_known_attrs=self._is_known_attrs_class(node),
+                symbol_index=symbol_index,
+                members=[],
             ),
         )
 
@@ -453,7 +468,11 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
     @override
     def leave_ClassDef(self, original_node: cst.ClassDef) -> None:
         if stack := self._class_stack:
-            stack.pop()
+            item = stack.pop()
+            self.symbols[item.symbol_index] = Symbol(
+                item.name,
+                Class(item.name, tuple(item.members)),
+            )
 
     @override
     def visit_FunctionDef(self, node: cst.FunctionDef) -> bool:
@@ -486,8 +505,11 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
                 else:
                     overloads = (self._callable_signature(node, known_name),)
 
-                self.symbols.append(Symbol(name, Function(name, overloads)))
+                func = Function(name, overloads)
+                self.symbols.append(Symbol(name, func))
                 self._added_functions.add(name)
+                if self._class_stack:
+                    self._class_stack[-1].members.append(func)
 
         self._function_depth += 1
         return True

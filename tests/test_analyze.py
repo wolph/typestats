@@ -392,6 +392,36 @@ class TestKnownAttrs:
         assert symbols["Foo.x"] is not KNOWN
         assert str(symbols["Foo.x"]) == "int"
 
+    def test_class_collects_members(self) -> None:
+        """collect_symbols should populate Class.members with member types."""
+        src = textwrap.dedent("""
+        class MyClass:
+            x: int
+
+            def method(self, a: int) -> str:
+                pass
+        """)
+        module = collect_symbols(src)
+        symbols = {s.name: s.type_ for s in module.symbols}
+        cls = symbols["MyClass"]
+
+        assert isinstance(cls, Class)
+        assert len(cls.members) == 2
+
+    def test_class_unannotated_method_not_annotated(self) -> None:
+        """A class with an unannotated method should not be considered annotated."""
+        src = textwrap.dedent("""
+        class Foo:
+            def bar(self, x):
+                pass
+        """)
+        module = collect_symbols(src)
+        symbols = {s.name: s.type_ for s in module.symbols}
+        cls = symbols["Foo"]
+
+        assert isinstance(cls, Class)
+        assert not is_annotated(cls)
+
 
 class TestIsAnnotated:
     def test_markers(self) -> None:
@@ -402,8 +432,64 @@ class TestIsAnnotated:
     def test_expr(self) -> None:
         assert is_annotated(Expr(cst.Name("int")))
 
-    def test_class(self) -> None:
+    def test_class_no_members(self) -> None:
+        """A class with no members is considered annotated."""
         assert is_annotated(Class("MyClass"))
+
+    def test_class_all_members_annotated(self) -> None:
+        """A class is annotated when all its members are annotated."""
+        cls = Class(
+            "MyClass",
+            members=(
+                Expr(cst.Name("int")),
+                Function(
+                    "method",
+                    (
+                        Overload(
+                            (
+                                Param("self", ParamKind.POSITIONAL_OR_KEYWORD, KNOWN),
+                                Param(
+                                    "x",
+                                    ParamKind.POSITIONAL_OR_KEYWORD,
+                                    Expr(cst.Name("int")),
+                                ),
+                            ),
+                            Expr(cst.Name("None")),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        assert is_annotated(cls)
+
+    def test_class_with_unannotated_method(self) -> None:
+        """A class with an unannotated method is not annotated."""
+        cls = Class(
+            "MatlabOpaque",
+            members=(
+                Function(
+                    "__new__",
+                    (
+                        Overload(
+                            (
+                                Param("cls", ParamKind.POSITIONAL_OR_KEYWORD, KNOWN),
+                                Param(
+                                    "input_array",
+                                    ParamKind.POSITIONAL_OR_KEYWORD,
+                                    UNKNOWN,
+                                ),
+                            ),
+                            UNKNOWN,
+                        ),
+                    ),
+                ),
+            ),
+        )
+        assert not is_annotated(cls)
+
+    def test_class_with_unannotated_attr(self) -> None:
+        """A class with an UNKNOWN attribute is not annotated."""
+        assert not is_annotated(Class("Foo", members=(UNKNOWN,)))
 
     def test_function_unannotated(self) -> None:
         """A function with no annotations should not be considered annotated."""
