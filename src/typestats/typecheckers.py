@@ -82,8 +82,7 @@ class TypecheckerConfig(abc.ABC):
                 await candidate.is_file()
                 and (result := await parser(candidate)) is not None
             ):
-                # https://github.com/facebook/pyrefly/issues/913
-                return result  # pyrefly: ignore[unbound-name]
+                return result
 
         return None
 

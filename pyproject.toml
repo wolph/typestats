@@ -44,8 +44,8 @@ test = [
 dev = [
   { include-group = "test" },
   "dprint-py>=0.51.1.0",
-  "pyrefly>=0.51.1",
-  "ruff>=0.15.0",
+  "pyrefly>=0.52.0",
+  "ruff>=0.15.1",
 ]
 
 [tool.uv.sources]
@@ -82,6 +82,7 @@ enabled-ignores = ["pyrefly"]
 implicit-any = "error"
 unannotated-parameter = "error"
 unannotated-return = "error"
+unused-ignore = "error"
 
 # (based)pyright
 
