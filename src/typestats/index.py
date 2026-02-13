@@ -591,13 +591,13 @@ async def example() -> None:
     import time  # noqa: PLC0415
 
     from typestats import _pypi  # noqa: PLC0415
-    from typestats._http import create_client  # noqa: PLC0415
+    from typestats._http import retry_client  # noqa: PLC0415
 
     package = sys.argv[1] if len(sys.argv) > 1 else "optype"
 
     t0 = time.monotonic()
     async with anyio.TemporaryDirectory() as temp_dir:
-        async with create_client() as client:
+        async with retry_client() as client:
             path, _ = await _pypi.download_sdist_latest(client, package, temp_dir)
 
         public_symbols = await collect_public_symbols(path)

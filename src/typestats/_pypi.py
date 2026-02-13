@@ -173,7 +173,7 @@ async def download_sdist_latest(
 
 @mainpy.main
 async def example() -> None:
-    from typestats._http import create_client  # noqa: PLC0415
+    from typestats._http import retry_client  # noqa: PLC0415
 
-    async with create_client() as client:
+    async with retry_client() as client:
         await download_sdist_latest(client, "optype", "./projects")

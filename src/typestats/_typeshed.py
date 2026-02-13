@@ -48,8 +48,8 @@ async def stub_packages(client: httpx.AsyncClient, /) -> list[str]:
 
 @mainpy.main
 async def example() -> None:
-    from typestats._http import create_client  # noqa: PLC0415
+    from typestats._http import retry_client  # noqa: PLC0415
 
-    async with create_client() as client:
+    async with retry_client() as client:
         packages = await stub_packages(client)
         print(*packages, sep="\n")  # noqa: T201

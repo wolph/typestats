@@ -444,7 +444,7 @@ test = [
 requires-dist = [
     { name = "anyio", specifier = ">=4.12.1,<5" },
     { name = "httpx", extras = ["http2"], specifier = ">=0.28.1,<1" },
-    { name = "httpx-retries", specifier = ">=0.4,<1" },
+    { name = "httpx-retries", specifier = ">=0.4.5,<1" },
     { name = "libcst", specifier = ">=1.8.6,<2" },
     { name = "mainpy", specifier = ">=1.5,<2" },
     { name = "packaging", specifier = ">=26.0" },
