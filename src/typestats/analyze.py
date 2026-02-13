@@ -100,13 +100,14 @@ def is_annotated(type_: TypeForm, /) -> bool:
 
     For ``Class`` types, the class is only considered annotated when **all**
     of its members (stored in ``Class.members``) are also annotated.
-    A class with no members is considered annotated.
+    Members marked ``KNOWN`` (e.g. dataclass fields, enum values) are
+    considered annotated.  A class with no members is considered annotated.
     """
     match type_:
         case Expr():
             return True
         case Class(members=members):
-            return all(is_annotated(m) for m in members)
+            return all(m is KNOWN or is_annotated(m) for m in members)
         case Function(overloads=overloads):
             return any(
                 overload.returns is not UNKNOWN
