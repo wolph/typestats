@@ -59,6 +59,7 @@ Per-module (via `libcst`):
 - **Overloaded functions**: `@overload` signatures collected and merged
 - **Properties**: `@property` / `@cached_property` (return type used as annotation)
 - **Classes**: including nested attribute annotations
+- **`__slots__` exclusion**: `__slots__` assignments are ignored
 - **Enum members**: auto-detected as `KNOWN` (via `Enum`/`IntEnum`/`StrEnum`/`Flag`/... bases)
 - **Dataclass / NamedTuple / TypedDict fields**: auto-detected as `KNOWN` (annotated by definition)
 - **Type-ignore comments**: `# type: ignore[...]`, `# pyrefly:ignore[...]`, etc.
