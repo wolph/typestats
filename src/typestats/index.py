@@ -344,7 +344,7 @@ class _SymbolResolver:
         self._candidates_cache[module_path] = candidates
         return candidates
 
-    def _resolve_import(
+    def _resolve_import(  # noqa: PLR0911
         self,
         name: str,
         target: str,
@@ -355,6 +355,19 @@ class _SymbolResolver:
         """Resolve an imported symbol to its public type, if applicable."""
         if target in self._module_symbols:
             if not _is_public_module(target):
+                # The target matches a private module path, but the import might
+                # actually refer to a symbol re-exported by the parent package (e.g.
+                # `from ._private import func` where `_private` has both a submodule
+                # named `func` and re-exports a `func` symbol via its __init__).
+                if "." in target:
+                    parent_mod, sym_name = target.rsplit(".", 1)
+                    if parent_mod in self._module_symbols:
+                        origin = (
+                            self._resolved_union.get(parent_mod, {}).get(sym_name)
+                            or self._module_candidates(parent_mod).get(sym_name)
+                        )  # fmt: skip
+                        if origin is not None and origin.type_ is not analyze.UNKNOWN:
+                            return analyze.Symbol(name, origin.type_)
                 return analyze.Symbol(name, analyze.UNKNOWN)
             return None
 

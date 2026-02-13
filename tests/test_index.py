@@ -173,13 +173,16 @@ def test_collect_public_symbols_explicit_private_reexports() -> None:
     assert "mylib.CanAdd" in names
     assert "mylib.CanSub" in names
     assert "mylib.do_add" in names
+    assert "mylib.do_mul" in names
 
     assert "mylib._core._can.CanAdd" not in names
     assert "mylib._core._can.CanSub" not in names
     assert "mylib._core._do.do_add" not in names
+    assert "mylib._core._ops.do_mul" not in names
     assert "mylib._core.CanAdd" not in names
     assert "mylib._core.CanSub" not in names
     assert "mylib._core.do_add" not in names
+    assert "mylib._core.do_mul" not in names
 
 
 def test_collect_public_symbols_pyi_relative_imports() -> None:
@@ -246,3 +249,18 @@ def test_collect_public_symbols_unresolved_all_names_unknown() -> None:
 
     assert "pkg.lazy.dynamic_b" in types
     assert types["pkg.lazy.dynamic_b"] is analyze.UNKNOWN
+
+
+def test_collect_public_symbols_same_name_module_not_unknown() -> None:
+    """Functions re-exported from a submodule with the same name should not be UNKNOWN.
+
+    When `from ._private import func` is used, and `_private` re-exports `func`
+    from a submodule also named `func` (e.g. `_private/func.py`), the import
+    target matches both a module path and a symbol name. The resolver should
+    recognise the re-exported symbol rather than treating it as a private module
+    import.
+    """
+    types = _public_symbol_types(_FIXTURES / "private_reexport")
+
+    assert "mylib.do_mul" in types
+    assert types["mylib.do_mul"] is not analyze.UNKNOWN
