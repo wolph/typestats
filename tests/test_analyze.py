@@ -12,6 +12,7 @@ from typestats.analyze import (
     Overload,
     Param,
     ParamKind,
+    annotation_counts,
     collect_symbols,
     is_annotated,
 )
@@ -726,3 +727,209 @@ class TestIsAnnotated:
             ),
         )
         assert is_annotated(func)
+
+
+class TestImplicitClassmethodDunders:
+    """__new__, __init_subclass__, and __class_getitem__ use cls, not self."""
+
+    def test_new_cls_known(self) -> None:
+        src = textwrap.dedent("""
+        class Foo:
+            def __new__(cls): ...
+        """)
+        module = collect_symbols(src)
+        func = next(s.type_ for s in module.symbols if s.name == "Foo.__new__")
+        assert isinstance(func, Function)
+        param = func.overloads[0].params[0]
+        assert param.name == "cls"
+        assert param.annotation is KNOWN
+
+    def test_init_subclass_cls_known(self) -> None:
+        src = textwrap.dedent("""
+        class Foo:
+            def __init_subclass__(cls): ...
+        """)
+        module = collect_symbols(src)
+        func = next(
+            s.type_ for s in module.symbols if s.name == "Foo.__init_subclass__"
+        )
+        assert isinstance(func, Function)
+        param = func.overloads[0].params[0]
+        assert param.name == "cls"
+        assert param.annotation is KNOWN
+
+    def test_class_getitem_cls_known(self) -> None:
+        src = textwrap.dedent("""
+        class Foo:
+            def __class_getitem__(cls, item): ...
+        """)
+        module = collect_symbols(src)
+        func = next(
+            s.type_ for s in module.symbols if s.name == "Foo.__class_getitem__"
+        )
+        assert isinstance(func, Function)
+        param = func.overloads[0].params[0]
+        assert param.name == "cls"
+        assert param.annotation is KNOWN
+
+    def test_regular_method_self_known(self) -> None:
+        """Regular methods should still use self, not cls."""
+        src = textwrap.dedent("""
+        class Foo:
+            def bar(self): ...
+        """)
+        module = collect_symbols(src)
+        func = next(s.type_ for s in module.symbols if s.name == "Foo.bar")
+        assert isinstance(func, Function)
+        param = func.overloads[0].params[0]
+        assert param.name == "self"
+        assert param.annotation is KNOWN
+
+
+class TestAnnotationCounts:
+    def test_unknown(self) -> None:
+        assert annotation_counts(UNKNOWN) == (0, 1)
+
+    def test_known(self) -> None:
+        assert annotation_counts(KNOWN) == (0, 0)
+
+    def test_external(self) -> None:
+        assert annotation_counts(EXTERNAL) == (0, 0)
+
+    def test_expr(self) -> None:
+        assert annotation_counts(Expr(cst.Name("int"))) == (1, 1)
+
+    def test_function_fully_annotated(self) -> None:
+        func = Function(
+            "f",
+            (
+                Overload(
+                    (
+                        Param(
+                            "x",
+                            ParamKind.POSITIONAL_OR_KEYWORD,
+                            Expr(cst.Name("int")),
+                        ),
+                    ),
+                    Expr(cst.Name("str")),
+                ),
+            ),
+        )
+        assert annotation_counts(func) == (2, 2)
+
+    def test_function_unannotated(self) -> None:
+        func = Function(
+            "f",
+            (
+                Overload(
+                    (Param("x", ParamKind.POSITIONAL_OR_KEYWORD, UNKNOWN),),
+                    UNKNOWN,
+                ),
+            ),
+        )
+        assert annotation_counts(func) == (0, 2)
+
+    def test_function_partial(self) -> None:
+        func = Function(
+            "f",
+            (
+                Overload(
+                    (
+                        Param("x", ParamKind.POSITIONAL_OR_KEYWORD, UNKNOWN),
+                        Param(
+                            "y",
+                            ParamKind.POSITIONAL_OR_KEYWORD,
+                            Expr(cst.Name("int")),
+                        ),
+                    ),
+                    UNKNOWN,
+                ),
+            ),
+        )
+        assert annotation_counts(func) == (1, 3)
+
+    def test_function_self_excluded(self) -> None:
+        """self/cls params marked KNOWN don't count as annotatable."""
+        func = Function(
+            "f",
+            (
+                Overload(
+                    (
+                        Param("self", ParamKind.POSITIONAL_OR_KEYWORD, KNOWN),
+                        Param(
+                            "x",
+                            ParamKind.POSITIONAL_OR_KEYWORD,
+                            Expr(cst.Name("int")),
+                        ),
+                    ),
+                    Expr(cst.Name("None")),
+                ),
+            ),
+        )
+        assert annotation_counts(func) == (2, 2)
+
+    def test_function_with_overloads(self) -> None:
+        func = Function(
+            "f",
+            (
+                Overload(
+                    (
+                        Param(
+                            "x",
+                            ParamKind.POSITIONAL_OR_KEYWORD,
+                            Expr(cst.Name("int")),
+                        ),
+                    ),
+                    Expr(cst.Name("int")),
+                ),
+                Overload(
+                    (
+                        Param(
+                            "x",
+                            ParamKind.POSITIONAL_OR_KEYWORD,
+                            Expr(cst.Name("str")),
+                        ),
+                    ),
+                    Expr(cst.Name("str")),
+                ),
+            ),
+        )
+        # 2 overloads * (1 param + 1 return) = 4 annotatable, all annotated
+        assert annotation_counts(func) == (4, 4)
+
+    def test_class_no_members(self) -> None:
+        assert annotation_counts(Class("Foo")) == (0, 0)
+
+    def test_class_with_annotated_members(self) -> None:
+        cls = Class("Foo", members=(Expr(cst.Name("int")), Expr(cst.Name("str"))))
+        assert annotation_counts(cls) == (2, 2)
+
+    def test_class_with_unannotated_member(self) -> None:
+        cls = Class("Foo", members=(UNKNOWN,))
+        assert annotation_counts(cls) == (0, 1)
+
+    def test_class_with_method(self) -> None:
+        cls = Class(
+            "Foo",
+            (
+                Function(
+                    "bar",
+                    (
+                        Overload(
+                            (
+                                Param("self", ParamKind.POSITIONAL_OR_KEYWORD, KNOWN),
+                                Param("x", ParamKind.POSITIONAL_OR_KEYWORD, UNKNOWN),
+                            ),
+                            Expr(cst.Name("None")),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        # method: 1 param (x) unannotated + 1 return annotated = (1, 2)
+        assert annotation_counts(cls) == (1, 2)
+
+    def test_class_known_members_zero(self) -> None:
+        """KNOWN members (dataclass fields, enum values) are 0/0."""
+        cls = Class("Foo", members=(KNOWN, KNOWN))
+        assert annotation_counts(cls) == (0, 0)
