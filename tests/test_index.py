@@ -11,6 +11,7 @@ from typestats.index import (
 )
 
 _FIXTURES: Path = Path(__file__).parent / "fixtures"
+_PROJECT: Path = _FIXTURES / "project"
 
 
 @pytest.mark.parametrize(
@@ -36,13 +37,13 @@ _FIXTURES: Path = Path(__file__).parent / "fixtures"
         ("numpy/f2py/__init__.pyi", "", False),
         # Prefix stripping: project under a tests/ directory should not match
         (
-            "tests/fixtures/public_project/pkg/__init__.py",
-            "tests/fixtures/public_project/",
+            "tests/fixtures/project/pkg/__init__.py",
+            "tests/fixtures/project/",
             False,
         ),
         (
-            "tests/fixtures/public_project/pkg/a.py",
-            "tests/fixtures/public_project/",
+            "tests/fixtures/project/pkg/a.py",
+            "tests/fixtures/project/",
             False,
         ),
     ],
@@ -142,7 +143,7 @@ def test_sources_to_module_paths_stubs_extra() -> None:
 
 
 def test_collect_public_symbols_respects_imports() -> None:
-    names = _public_symbol_names(_FIXTURES / "public_project")
+    names = _public_symbol_names(_PROJECT)
 
     assert "pkg.public_func" in names
     assert "pkg.__version__" in names
@@ -156,7 +157,7 @@ def test_collect_public_symbols_respects_imports() -> None:
 
 
 def test_collect_public_symbols_implicit_reexports() -> None:
-    names = _public_symbol_names(_FIXTURES / "public_project")
+    names = _public_symbol_names(_PROJECT)
 
     assert "pkg.a.spam" in names
     assert "pkg.api.spam" in names
@@ -167,7 +168,7 @@ def test_collect_public_symbols_implicit_reexports() -> None:
 
 
 def test_collect_public_symbols_explicit_private_reexports() -> None:
-    names = _public_symbol_names(_FIXTURES / "private_reexport")
+    names = _public_symbol_names(_PROJECT)
 
     assert "mylib.__version__" in names
     assert "mylib.CanAdd" in names
@@ -187,18 +188,18 @@ def test_collect_public_symbols_explicit_private_reexports() -> None:
 
 def test_collect_public_symbols_pyi_relative_imports() -> None:
     """Stub files with relative imports should resolve symbols correctly."""
-    names = _public_symbol_names(_FIXTURES / "private_reexport_pyi")
+    names = _public_symbol_names(_PROJECT)
 
     # The .pyi stub uses relative imports (from ._core._can import CanAdd)
     # and has an explicit __all__; all listed symbols should be public.
-    assert "mylib.__version__" in names
-    assert "mylib.CanAdd" in names
-    assert "mylib.CanSub" in names
-    assert "mylib.do_add" in names
+    assert "mylib_pyi.__version__" in names
+    assert "mylib_pyi.CanAdd" in names
+    assert "mylib_pyi.CanSub" in names
+    assert "mylib_pyi.do_add" in names
 
     # Private module symbols should not leak
-    assert "mylib._core._can.CanAdd" not in names
-    assert "mylib._core._do.do_add" not in names
+    assert "mylib_pyi._core._can.CanAdd" not in names
+    assert "mylib_pyi._core._do.do_add" not in names
 
 
 def _public_symbol_types(project_dir: Path) -> dict[str, analyze.TypeForm]:
@@ -217,7 +218,7 @@ def _public_symbol_types(project_dir: Path) -> dict[str, analyze.TypeForm]:
 
 def test_collect_public_symbols_external_reexport() -> None:
     """Re-exports from external packages should be marked EXTERNAL."""
-    types = _public_symbol_types(_FIXTURES / "public_project")
+    types = _public_symbol_types(_PROJECT)
 
     # `sin` is imported from stdlib `math` and listed in __all__
     assert "pkg.sin" in types
@@ -226,7 +227,7 @@ def test_collect_public_symbols_external_reexport() -> None:
 
 def test_collect_public_symbols_pyi_stub_types_not_unknown() -> None:
     """Symbols typed only in .pyi stubs should not be reported as UNKNOWN."""
-    types = _public_symbol_types(_FIXTURES / "stub_typed_private")
+    types = _public_symbol_types(_PROJECT)
 
     assert "stubpkg.AnnotatedAlias" in types
     assert "stubpkg.GenericType" in types
@@ -236,7 +237,7 @@ def test_collect_public_symbols_pyi_stub_types_not_unknown() -> None:
 
 def test_collect_public_symbols_unresolved_all_names_unknown() -> None:
     """Names in __all__ that can't be resolved should be UNKNOWN."""
-    types = _public_symbol_types(_FIXTURES / "public_project")
+    types = _public_symbol_types(_PROJECT)
 
     # spam is imported from _b and should be resolved normally
     assert "pkg.lazy.spam" in types
@@ -260,7 +261,7 @@ def test_collect_public_symbols_same_name_module_not_unknown() -> None:
     recognise the re-exported symbol rather than treating it as a private module
     import.
     """
-    types = _public_symbol_types(_FIXTURES / "private_reexport")
+    types = _public_symbol_types(_PROJECT)
 
     assert "mylib.do_mul" in types
     assert types["mylib.do_mul"] is not analyze.UNKNOWN

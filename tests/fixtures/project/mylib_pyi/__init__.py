@@ -1,5 +1,5 @@
-from optype import _core
-from optype._core import *
+from mylib_pyi import _core
+from mylib_pyi._core import *
 
 __all__ = ["__version__"]
 __all__ += _core.__all__
