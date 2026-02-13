@@ -570,6 +570,7 @@ async def collect_public_symbols(
 @mainpy.main
 async def example() -> None:
     import sys  # noqa: PLC0415
+    import time  # noqa: PLC0415
 
     import httpx  # noqa: PLC0415
 
@@ -577,6 +578,7 @@ async def example() -> None:
 
     package = sys.argv[1] if len(sys.argv) > 1 else "optype"
 
+    t0 = time.monotonic()
     async with anyio.TemporaryDirectory() as temp_dir:
         async with httpx.AsyncClient(http2=True) as client:
             path, _ = await _pypi.download_sdist_latest(client, package, temp_dir)
@@ -584,15 +586,27 @@ async def example() -> None:
         public_symbols = await collect_public_symbols(path)
         for source_path, symbols in sorted(public_symbols.items()):
             rel_path = source_path.relative_to(path)
-            n_total = sum(
+            n_annotated = sum(1 for s in symbols if analyze.is_annotated(s.type_))
+            n_unannotated = sum(
                 1
                 for s in symbols
-                if s.type_ is not analyze.KNOWN and s.type_ is not analyze.EXTERNAL
+                if not analyze.is_annotated(s.type_)
+                and s.type_ is not analyze.KNOWN
+                and s.type_ is not analyze.EXTERNAL
             )
-            n_unknown = sum(1 for s in symbols if s.type_ is analyze.UNKNOWN)
-            names_unknown = ", ".join(
-                sorted(s.name for s in symbols if s.type_ is analyze.UNKNOWN),
+            names_unannotated = ", ".join(
+                sorted(
+                    s.name
+                    for s in symbols
+                    if not analyze.is_annotated(s.type_)
+                    and s.type_ is not analyze.KNOWN
+                    and s.type_ is not analyze.EXTERNAL
+                ),
             )
             print(  # noqa: T201
-                f"{rel_path} -> {n_total} known, {n_unknown} unknown ({names_unknown})",
+                f"{rel_path} -> {n_annotated} annotated,"
+                f" {n_unannotated} unannotated ({names_unannotated})",
             )
+
+    elapsed = time.monotonic() - t0
+    _logger.info("Total runtime: %.2fs", elapsed)
