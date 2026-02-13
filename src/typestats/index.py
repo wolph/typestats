@@ -613,7 +613,7 @@ async def example() -> None:
                 a, t = analyze.annotation_counts(s.type_)
                 file_annotated += a
                 file_annotatable += t
-                if not analyze.is_annotated(s.type_) and t > 0:
+                if a < t:
                     names_unannotated.append(s.name)
             total_annotated += file_annotated
             total_annotatable += file_annotatable
