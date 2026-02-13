@@ -380,6 +380,52 @@ class TestKnownAttrs:
 
         assert symbols["Config.name"] is KNOWN
 
+    def test_dataclass_is_annotated(self) -> None:
+        """A dataclass with annotated fields should be considered annotated."""
+        src = textwrap.dedent("""
+        from dataclasses import dataclass
+
+        @dataclass
+        class Point:
+            x: int
+            y: float
+        """)
+        module = collect_symbols(src)
+        symbols = {s.name: s.type_ for s in module.symbols}
+
+        assert isinstance(symbols["Point"], Class)
+        assert is_annotated(symbols["Point"])
+
+    def test_namedtuple_is_annotated(self) -> None:
+        """A NamedTuple with annotated fields should be considered annotated."""
+        src = textwrap.dedent("""
+        from typing import NamedTuple
+
+        class Coord(NamedTuple):
+            x: int
+            y: int
+        """)
+        module = collect_symbols(src)
+        symbols = {s.name: s.type_ for s in module.symbols}
+
+        assert isinstance(symbols["Coord"], Class)
+        assert is_annotated(symbols["Coord"])
+
+    def test_enum_is_annotated(self) -> None:
+        """An enum with KNOWN members should be considered annotated."""
+        src = textwrap.dedent("""
+        from enum import Enum
+
+        class Color(Enum):
+            RED = 1
+            BLUE = 2
+        """)
+        module = collect_symbols(src)
+        symbols = {s.name: s.type_ for s in module.symbols}
+
+        assert isinstance(symbols["Color"], Class)
+        assert is_annotated(symbols["Color"])
+
     def test_regular_class_attrs_not_known(self) -> None:
         """Annotated attrs in plain classes should keep their type expression."""
         src = textwrap.dedent("""
@@ -607,6 +653,10 @@ class TestIsAnnotated:
             ),
         )
         assert not is_annotated(cls)
+
+    def test_class_with_known_members(self) -> None:
+        """A class with KNOWN members (e.g. dataclass fields) is annotated."""
+        assert is_annotated(Class("Foo", members=(KNOWN, KNOWN)))
 
     def test_class_with_unannotated_attr(self) -> None:
         """A class with an UNKNOWN attribute is not annotated."""
