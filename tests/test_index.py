@@ -5,6 +5,7 @@ import pytest
 
 from typestats import analyze
 from typestats.index import (
+    _TYPESHED_REWRITES,
     _is_excluded_path,
     collect_public_symbols,
     sources_to_module_paths,
@@ -264,3 +265,34 @@ def test_collect_public_symbols_same_name_module_not_unknown() -> None:
 
     assert "mylib.do_mul" in types
     assert types["mylib.do_mul"] is not analyze.UNKNOWN
+
+
+class TestTypeshedRewrites:
+    def test_incomplete_resolves_to_any(self) -> None:
+        """_typeshed.Incomplete should resolve to Expr(Any)."""
+        assert "_typeshed.Incomplete" in _TYPESHED_REWRITES
+        assert str(_TYPESHED_REWRITES["_typeshed.Incomplete"]) == "Any"
+
+    def test_unused_resolves_to_object(self) -> None:
+        """_typeshed.Unused should resolve to Expr(object)."""
+        assert "_typeshed.Unused" in _TYPESHED_REWRITES
+        assert str(_TYPESHED_REWRITES["_typeshed.Unused"]) == "object"
+
+    def test_maybe_none_resolves_to_any(self) -> None:
+        """_typeshed.MaybeNone should resolve to Expr(Any)."""
+        assert "_typeshed.MaybeNone" in _TYPESHED_REWRITES
+        assert str(_TYPESHED_REWRITES["_typeshed.MaybeNone"]) == "Any"
+
+    def test_sentinel_resolves_to_any(self) -> None:
+        """_typeshed.sentinel should resolve to Expr(Any)."""
+        assert "_typeshed.sentinel" in _TYPESHED_REWRITES
+        assert str(_TYPESHED_REWRITES["_typeshed.sentinel"]) == "Any"
+
+    def test_annotation_form_resolves_to_any(self) -> None:
+        """_typeshed.AnnotationForm should resolve to Expr(Any)."""
+        assert "_typeshed.AnnotationForm" in _TYPESHED_REWRITES
+        assert str(_TYPESHED_REWRITES["_typeshed.AnnotationForm"]) == "Any"
+
+    def test_strpath_not_rewritten(self) -> None:
+        """_typeshed.StrPath should NOT be rewritten (it's a regular typeshed type)."""
+        assert "_typeshed.StrPath" not in _TYPESHED_REWRITES

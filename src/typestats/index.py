@@ -6,6 +6,7 @@ from collections import defaultdict, deque
 from typing import TYPE_CHECKING, Final
 
 import anyio
+import libcst as cst
 import mainpy
 
 from typestats import _ruff, analyze
@@ -39,6 +40,14 @@ _EXCLUDED_DIR_NAMES: Final[frozenset[str]] = frozenset({
 _EXCLUDED_FILE_NAMES: Final[frozenset[str]] = frozenset({
     "conftest.py",
 })
+
+_TYPESHED_REWRITES: Final[dict[str, analyze.TypeForm]] = {
+    "_typeshed.Incomplete": analyze.Expr(cst.Name("Any")),
+    "_typeshed.Unused": analyze.Expr(cst.Name("object")),
+    "_typeshed.MaybeNone": analyze.Expr(cst.Name("Any")),
+    "_typeshed.sentinel": analyze.Expr(cst.Name("Any")),
+    "_typeshed.AnnotationForm": analyze.Expr(cst.Name("Any")),
+}
 
 type _SymbolMap = dict[str, analyze.Symbol]
 
@@ -344,7 +353,7 @@ class _SymbolResolver:
         self._candidates_cache[module_path] = candidates
         return candidates
 
-    def _resolve_import(  # noqa: PLR0911
+    def _resolve_import(  # noqa: C901, PLR0911
         self,
         name: str,
         target: str,
@@ -370,6 +379,9 @@ class _SymbolResolver:
                             return analyze.Symbol(name, origin.type_)
                 return analyze.Symbol(name, analyze.UNKNOWN)
             return None
+
+        if target in _TYPESHED_REWRITES:
+            return analyze.Symbol(name, _TYPESHED_REWRITES[target])
 
         if (
             "." not in target
