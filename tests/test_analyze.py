@@ -475,6 +475,75 @@ class TestKnownAttrs:
         assert len(cls.members) == 1
 
 
+class TestClassMethodAlias:
+    def test_simple(self) -> None:
+        src = textwrap.dedent("""
+        class Foo:
+            def __and__(self, other: int, /) -> bool: ...
+            __rand__ = __and__
+        """)
+        module = collect_symbols(src)
+        symbols = {s.name: s.type_ for s in module.symbols}
+
+        assert isinstance(symbols["Foo.__rand__"], Function)
+        assert is_annotated(symbols["Foo"])
+
+    def test_overloaded(self) -> None:
+        src = textwrap.dedent("""
+        from typing import overload
+
+        class Bool:
+            @overload
+            def __and__(self, other: bool, /) -> bool: ...
+            @overload
+            def __and__(self, other: int, /) -> int: ...
+            def __and__(self, other: bool | int, /) -> bool | int: ...
+            __rand__ = __and__
+        """)
+        module = collect_symbols(src)
+        symbols = {s.name: s.type_ for s in module.symbols}
+        rand_func = symbols["Bool.__rand__"]
+        and_func = symbols["Bool.__and__"]
+
+        assert isinstance(rand_func, Function)
+        assert isinstance(and_func, Function)
+        assert len(rand_func.overloads) == len(and_func.overloads)
+        assert is_annotated(symbols["Bool"])
+
+    def test_overload_only(self) -> None:
+        """Overload-only methods (no implementation), common in stubs."""
+        src = textwrap.dedent("""
+        from typing import overload
+
+        class Bool:
+            @overload
+            def __and__(self, other: bool, /) -> bool: ...
+            @overload
+            def __and__(self, other: int, /) -> int: ...
+            __rand__ = __and__
+        """)
+        module = collect_symbols(src)
+        symbols = {s.name: s.type_ for s in module.symbols}
+        rand_func = symbols["Bool.__rand__"]
+
+        assert isinstance(rand_func, Function)
+        assert len(rand_func.overloads) == 2
+        assert is_annotated(symbols["Bool"])
+
+    def test_adds_to_class_members(self) -> None:
+        src = textwrap.dedent("""
+        class Foo:
+            def __and__(self, other: int, /) -> bool: ...
+            __rand__ = __and__
+        """)
+        module = collect_symbols(src)
+        cls = {s.name: s.type_ for s in module.symbols}["Foo"]
+
+        assert isinstance(cls, Class)
+        assert len(cls.members) == 2
+        assert all(is_annotated(m) for m in cls.members)
+
+
 class TestIsAnnotated:
     def test_markers(self) -> None:
         assert not is_annotated(UNKNOWN)

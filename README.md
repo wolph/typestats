@@ -57,6 +57,7 @@ Per-module (via `libcst`):
 - **Annotated variables**: `x: T` and `x: T = ...`
 - **Functions/methods**: full parameter signatures with `self`/`cls` inference
 - **Overloaded functions**: `@overload` signatures collected and merged
+- **Method aliases**: `__radd__ = __add__` inherits the full function signature
 - **Properties**: `@property` / `@cached_property` (return type used as annotation)
 - **Classes**: including nested attribute annotations
 - **`__slots__` exclusion**: `__slots__` assignments are ignored
