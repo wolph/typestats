@@ -27,6 +27,7 @@ __all__ = (
     "TypeAlias",
     "TypeForm",
     "collect_symbols",
+    "is_annotated",
 )
 
 _EMPTY_MODULE: Final[cst.Module] = cst.Module([])
@@ -88,6 +89,29 @@ KNOWN: Final[_KnownType] = _TypeMarker.KNOWN
 EXTERNAL: Final[_ExternalType] = _TypeMarker.EXTERNAL
 
 type _NameResolver = Callable[[cst.CSTNode], str | None]
+
+
+def is_annotated(type_: TypeForm, /) -> bool:
+    """Check if a type form represents a meaningfully annotated symbol.
+
+    Returns ``False`` for ``UNKNOWN``, ``KNOWN``, ``EXTERNAL``, and for
+    ``Function`` types where every parameter (other than *self*/*cls*) and
+    the return type are ``UNKNOWN``.
+    """
+    match type_:
+        case Expr() | Class():
+            return True
+        case Function(overloads=overloads):
+            return any(
+                overload.returns is not UNKNOWN
+                or any(
+                    param.annotation is not UNKNOWN and param.annotation is not KNOWN
+                    for param in overload.params
+                )
+                for overload in overloads
+            )
+        case _:
+            return False
 
 
 @dataclass(frozen=True, slots=True)
