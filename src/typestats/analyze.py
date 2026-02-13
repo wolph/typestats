@@ -26,6 +26,7 @@ __all__ = (
     "Symbol",
     "TypeAlias",
     "TypeForm",
+    "annotation_counts",
     "collect_symbols",
     "is_annotated",
 )
@@ -41,6 +42,11 @@ _ENUM_BASES: Final[frozenset[str]] = frozenset({
 })
 _KNOWN_ATTRS_BASES: Final[frozenset[str]] = frozenset({"NamedTuple", "TypedDict"})
 _DATACLASS_DECORATORS: Final[frozenset[str]] = frozenset({"dataclass"})
+_IMPLICIT_CLASSMETHODS: Final[frozenset[str]] = frozenset({
+    "__new__",
+    "__init_subclass__",
+    "__class_getitem__",
+})
 _SPECIAL_TYPEFORMS: Final[frozenset[str]] = frozenset({
     "namedtuple",
     "NewType",
@@ -174,6 +180,21 @@ class Overload:
         params = ", ".join(str(param) for param in self.params)
         return f"({params}) -> {self.returns}"
 
+    @property
+    def annotation_counts(self) -> tuple[int, int]:
+        """``(annotated, annotatable)`` counts for non-self/cls params + return."""
+        annotated = 0
+        annotatable = 0
+        for p in self.params:
+            if p.annotation is not KNOWN:
+                annotatable += 1
+                if p.annotation is not UNKNOWN:
+                    annotated += 1
+        annotatable += 1
+        if self.returns is not UNKNOWN:
+            annotated += 1
+        return annotated, annotatable
+
 
 @dataclass(frozen=True, slots=True)
 class Function:
@@ -192,6 +213,17 @@ class Function:
         # an overloaded function type is the intersection of its overloads
         return " & ".join(f"({sig})" for sig in self.overloads)
 
+    @property
+    def annotation_counts(self) -> tuple[int, int]:
+        """``(annotated, annotatable)`` counts across all overloads."""
+        annotated = 0
+        annotatable = 0
+        for o in self.overloads:
+            a, t = o.annotation_counts
+            annotated += a
+            annotatable += t
+        return annotated, annotatable
+
 
 @dataclass(frozen=True, slots=True)
 class Class:
@@ -201,6 +233,30 @@ class Class:
     @override
     def __str__(self) -> str:
         return f"type[{self.name}]"
+
+    @property
+    def annotation_counts(self) -> tuple[int, int]:
+        """``(annotated, annotatable)`` counts across all members."""
+        annotated = 0
+        annotatable = 0
+        for m in self.members:
+            a, t = annotation_counts(m)
+            annotated += a
+            annotatable += t
+        return annotated, annotatable
+
+
+def annotation_counts(type_: TypeForm, /) -> tuple[int, int]:
+    """``(annotated, annotatable)`` counts for an arbitrary type form."""
+    match type_:
+        case Function() | Class():
+            return type_.annotation_counts
+        case Expr():
+            return 1, 1
+        case _TypeMarker.UNKNOWN:
+            return 0, 1
+        case _:
+            return 0, 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -491,7 +547,11 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
 
             if self._class_stack and "staticmethod" not in decorators:
                 # TODO(@jorenham): don't rely on name-based heuristic for self/cls
-                known_name = "cls" if "classmethod" in decorators else "self"
+                is_cls = (
+                    "classmethod" in decorators
+                    or node.name.value in _IMPLICIT_CLASSMETHODS
+                )
+                known_name = "cls" if is_cls else "self"
             else:
                 known_name = None
 

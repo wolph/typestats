@@ -601,30 +601,31 @@ async def example() -> None:
         async with httpx.AsyncClient(http2=True) as client:
             path, _ = await _pypi.download_sdist_latest(client, package, temp_dir)
 
+        total_annotated = 0
+        total_annotatable = 0
         public_symbols = await collect_public_symbols(path)
         for source_path, symbols in sorted(public_symbols.items()):
             rel_path = source_path.relative_to(path)
-            n_annotated = sum(1 for s in symbols if analyze.is_annotated(s.type_))
-            n_unannotated = sum(
-                1
-                for s in symbols
-                if not analyze.is_annotated(s.type_)
-                and s.type_ is not analyze.KNOWN
-                and s.type_ is not analyze.EXTERNAL
-            )
-            names_unannotated = ", ".join(
-                sorted(
-                    s.name
-                    for s in symbols
-                    if not analyze.is_annotated(s.type_)
-                    and s.type_ is not analyze.KNOWN
-                    and s.type_ is not analyze.EXTERNAL
-                ),
-            )
+            file_annotated = 0
+            file_annotatable = 0
+            names_unannotated: list[str] = []
+            for s in symbols:
+                a, t = analyze.annotation_counts(s.type_)
+                file_annotated += a
+                file_annotatable += t
+                if not analyze.is_annotated(s.type_) and t > 0:
+                    names_unannotated.append(s.name)
+            total_annotated += file_annotated
+            total_annotatable += file_annotatable
             print(  # noqa: T201
-                f"{rel_path} -> {n_annotated} annotated,"
-                f" {n_unannotated} unannotated ({names_unannotated})",
+                f"{rel_path} -> {file_annotated}/{file_annotatable} annotated"
+                f" ({', '.join(sorted(names_unannotated))})",
             )
+
+        pct = total_annotated / total_annotatable * 100 if total_annotatable else 0
+        print(  # noqa: T201
+            f"\nTotal: {total_annotated}/{total_annotatable} annotated ({pct:.1f}%)",
+        )
 
     elapsed = time.monotonic() - t0
     _logger.info("Total runtime: %.2fs", elapsed)
