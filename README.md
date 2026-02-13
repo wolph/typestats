@@ -75,6 +75,8 @@ Cross-module (via import graph):
 - **Excluded directories and files**: the following directories are automatically excluded from
   analysis: `.spin`, `_examples`, `benchmarks`, `doc`, `docs`, `examples`, `tests`, `tools`.
   The file `conftest.py` is also excluded wherever it appears.
+- **Namespace package exclusion**: directories without `__init__.py` nested inside a proper package
+  are excluded (e.g. vendored third-party code like `numpy/linalg/lapack_lite/`)
 - **Public symbol resolution**: follows imports across modules, iterating until convergence
 - **Private module re-exports**: symbols re-exported from `_private` modules via `__all__`
 - **Wildcard re-export expansion**: `from _internal import *` resolved to concrete symbols
