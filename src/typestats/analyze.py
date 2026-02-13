@@ -260,6 +260,10 @@ def _extract_names(expr: cst.BaseExpression) -> list[cst.Name]:
             return []
 
 
+def _is_dunder_slots(expr: cst.BaseExpression) -> bool:
+    return isinstance(expr, cst.Name) and expr.value == "__slots__"
+
+
 def _leaf_name(name: str) -> str:
     return name.rsplit(".", 1)[-1]
 
@@ -532,6 +536,10 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         if self._function_depth != 0:
             return
 
+        # __slots__ is a runtime implementation detail, not a type annotation
+        if self._class_stack and _is_dunder_slots(node.target):
+            return
+
         if node.value is not None:
             if self._is_typealias_annotation(node.annotation):
                 for name_node in _extract_names(node.target):
@@ -600,6 +608,12 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
     @override
     def visit_Assign(self, node: cst.Assign) -> None:
         if self._function_depth:
+            return
+
+        # __slots__ is a runtime implementation detail, not a type annotation
+        if self._class_stack and all(
+            _is_dunder_slots(target.target) for target in node.targets
+        ):
             return
 
         if typealias_value := self._typealias_value_from_call(node.value):

@@ -422,6 +422,58 @@ class TestKnownAttrs:
         assert isinstance(cls, Class)
         assert not is_annotated(cls)
 
+    def test_slots_excluded_from_members(self) -> None:
+        """__slots__ should not appear as a class member or symbol."""
+        src = textwrap.dedent("""
+        class AxisError(ValueError, IndexError):
+            __slots__ = "_msg", "axis", "ndim"
+
+            axis: int | None
+            ndim: int | None
+        """)
+        module = collect_symbols(src)
+        symbols = {s.name: s.type_ for s in module.symbols}
+
+        assert "AxisError.__slots__" not in symbols
+        cls = symbols["AxisError"]
+        assert isinstance(cls, Class)
+        assert len(cls.members) == 2
+        assert is_annotated(cls)
+
+    def test_slots_list_excluded(self) -> None:
+        """__slots__ as a list should also be excluded."""
+        src = textwrap.dedent("""
+        class Foo:
+            __slots__ = ["x", "y"]
+
+            x: int
+            y: str
+        """)
+        module = collect_symbols(src)
+        symbols = {s.name: s.type_ for s in module.symbols}
+
+        assert "Foo.__slots__" not in symbols
+        cls = symbols["Foo"]
+        assert isinstance(cls, Class)
+        assert len(cls.members) == 2
+
+    def test_annotated_slots_excluded(self) -> None:
+        """Annotated __slots__ (e.g. `__slots__: tuple[str, ...] = (...)`) should
+        also be excluded."""
+        src = textwrap.dedent("""
+        class Bar:
+            __slots__: tuple[str, ...] = ("a",)
+
+            a: int
+        """)
+        module = collect_symbols(src)
+        symbols = {s.name: s.type_ for s in module.symbols}
+
+        assert "Bar.__slots__" not in symbols
+        cls = symbols["Bar"]
+        assert isinstance(cls, Class)
+        assert len(cls.members) == 1
+
 
 class TestIsAnnotated:
     def test_markers(self) -> None:
