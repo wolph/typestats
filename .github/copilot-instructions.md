@@ -39,8 +39,8 @@ For a given PyPI project the tool runs an end-to-end pipeline:
 
 ## Conventions
 
-- **Python ≥ 3.14** — the project targets the latest Python and uses free-threading for
-  performance.
+- **Python ≥ 3.14** — the project targets the latest Python, and can optionally run on a
+  free-threaded (e.g. `3.14t`) build for performance.
 - **Async IO** — all IO (HTTP, subprocesses, file reads) is async via `anyio` + `httpx` (HTTP/2).
 - **`libcst`** — used instead of `ast` because it preserves comments and formatting, which are
   needed for detecting type-ignore directives and other metadata.
