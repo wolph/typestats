@@ -557,6 +557,31 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         for name_node in _extract_names(node.target):
             self._add_symbol(name_node, ty)
 
+    def _try_resolve_method_alias(self, node: cst.Assign) -> bool:
+        if not self._class_stack or not isinstance(node.value, cst.Name):
+            return False
+
+        ref = f"{self._class_stack[-1].name}.{node.value.value}"
+
+        if overloads := self._overload_map.get(ref):
+            ref_func = Function(ref, (overloads[0], *overloads[1:]))
+        else:
+            src_type = next(
+                (s.type_ for s in self.symbols if s.name == ref),
+                None,
+            )
+            if not isinstance(src_type, Function):
+                return False
+            ref_func = src_type
+
+        for target in node.targets:
+            for name_node in _extract_names(target.target):
+                alias_name = self._symbol_name(name_node)
+                func = Function(alias_name, ref_func.overloads)
+                self.symbols.append(Symbol(alias_name, func))
+                self._class_stack[-1].members.append(func)
+        return True
+
     def _try_add_name_alias(self, node: cst.Assign) -> bool:  # noqa: C901
         """Handle `X = some_name` or `X = some_name[...]` as an import alias
         or type alias.
@@ -625,7 +650,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         if self._is_special_typeform(node.value):
             return
 
-        if self._try_add_name_alias(node):
+        if self._try_add_name_alias(node) or self._try_resolve_method_alias(node):
             return
 
         # enum attributes are considered KNOWN
