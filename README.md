@@ -82,6 +82,9 @@ Cross-module (via import graph):
 - **Wildcard re-export expansion**: `from _internal import *` resolved to concrete symbols
 - **External vs unknown**: imported symbols from external packages marked `EXTERNAL`, not `UNKNOWN`,
   and excluded from coverage denominator
+- **Unresolved `__all__` names**: names listed in `__all__` that cannot be resolved to any local
+  definition or import are treated as `UNKNOWN`—matching the behavior of type-checkers, which would
+  infer these as `Any` or `Unknown` (e.g. modules using `__getattr__` for lazy loading)
 - **Stub file priority**: When both `.py` and `.pyi` files exist for the same module, only the
   `.pyi` stub is used—matching the behavior of type-checkers
   ([spec](https://typing.python.org/en/latest/spec/distributing.html#import-resolution-ordering))

@@ -467,6 +467,11 @@ class _SymbolResolver:
 
             if sym is not None:
                 exports[name] = sym
+            elif symbols.exports_explicit is not None and name not in import_map:
+                # Name listed in __all__ but not resolvable locally or via
+                # imports (e.g. provided by a module-level __getattr__).
+                # Treat as UNKNOWN so it matches type-checker behaviour.
+                exports[name] = analyze.Symbol(name, analyze.UNKNOWN)
         return exports
 
     def resolve_all(self) -> None:
