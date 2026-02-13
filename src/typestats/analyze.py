@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 __all__ = (
     "IgnoreComment",
     "ModuleSymbols",
+    "Property",
     "Symbol",
     "TypeAlias",
     "TypeForm",
@@ -51,7 +52,7 @@ _SPECIAL_TYPEFORMS: Final[frozenset[str]] = frozenset({
     "TypeVarTuple",
 })
 
-type TypeForm = _TypeMarker | Expr | Function | Class
+type TypeForm = _TypeMarker | Expr | Function | Class | Property
 
 
 class ParamKind(StrEnum):
@@ -108,6 +109,8 @@ def is_annotated(type_: TypeForm, /) -> bool:
             return True
         case Class(members=members):
             return all(m is KNOWN or is_annotated(m) for m in members)
+        case Property(getter=getter):
+            return getter is not UNKNOWN
         case Function(overloads=overloads):
             return any(
                 overload.returns is not UNKNOWN
@@ -201,6 +204,23 @@ class Class:
     @override
     def __str__(self) -> str:
         return f"type[{self.name}]"
+
+
+@dataclass(frozen=True, slots=True)
+class Property:
+    name: str
+    getter: TypeForm
+    setter: TypeForm | None = None
+    has_deleter: bool = False
+
+    @override
+    def __str__(self) -> str:
+        parts = [f"getter: {self.getter}"]
+        if self.setter is not None:
+            parts.append(f"setter: {self.setter}")
+        if self.has_deleter:
+            parts.append("deleter")
+        return f"property({', '.join(parts)})"
 
 
 @dataclass(frozen=True, slots=True)
@@ -313,6 +333,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
     _function_depth: int
     _overload_map: defaultdict[str, list[Overload]]
     _added_functions: set[str]
+    _property_map: dict[str, dict[str, TypeForm]]
 
     def __init__(self, module: cst.Module, /) -> None:
         self.module = module
@@ -323,6 +344,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         self._function_depth = 0
         self._overload_map = defaultdict(list)
         self._added_functions = set()
+        self._property_map = {}
 
     def _get_qualified_names(self, node: cst.CSTNode) -> Collection[QualifiedName]:
         return self.get_metadata(QualifiedNameProvider, node, default=set())
@@ -450,6 +472,65 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
             Expr.from_annotation(node.returns, self._qualified_name),
         )
 
+    @staticmethod
+    def _detect_property_role(
+        node: cst.FunctionDef,
+        decorators: set[str],
+    ) -> str | None:
+        """Detect if a function is a property getter, setter, or deleter."""
+        if "property" in decorators or "cached_property" in decorators:
+            return "getter"
+        for dec in node.decorators:
+            expr = dec.decorator
+            if isinstance(expr, cst.Attribute) and isinstance(expr.attr, cst.Name):
+                if expr.attr.value == "setter":
+                    return "setter"
+                if expr.attr.value == "deleter":
+                    return "deleter"
+        return None
+
+    def _record_property(
+        self,
+        node: cst.FunctionDef,
+        name: str,
+        role: str,
+    ) -> None:
+        """Record property getter/setter/deleter info for later emission."""
+        if name not in self._property_map:
+            self._property_map[name] = {}
+
+        if role == "getter":
+            self._property_map[name]["getter"] = Expr.from_annotation(
+                node.returns,
+                self._qualified_name,
+            )
+        elif role == "setter":
+            all_params = [*node.params.posonly_params, *node.params.params]
+            if len(all_params) >= 2:  # noqa: PLR2004
+                self._property_map[name]["setter"] = Expr.from_annotation(
+                    all_params[1].annotation,
+                    self._qualified_name,
+                )
+        elif role == "deleter":
+            self._property_map[name]["deleter"] = KNOWN
+
+    def _emit_properties(self, class_prefix: str = "") -> list[TypeForm]:
+        """Emit Property symbols for accumulated property data, returning members."""
+        members: list[TypeForm] = []
+        for prop_name in list(self._property_map):
+            if class_prefix and not prop_name.startswith(class_prefix):
+                continue
+            if not class_prefix and "." in prop_name:
+                continue
+            prop_data = self._property_map.pop(prop_name)
+            getter = prop_data.get("getter", UNKNOWN)
+            setter = prop_data.get("setter")
+            has_deleter = "deleter" in prop_data
+            prop = Property(prop_name, getter, setter, has_deleter)
+            self.symbols.append(Symbol(prop_name, prop))
+            members.append(prop)
+        return members
+
     @override
     def visit_ClassDef(self, node: cst.ClassDef) -> bool:
         if self._function_depth:
@@ -474,6 +555,9 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
     def leave_ClassDef(self, original_node: cst.ClassDef) -> None:
         if stack := self._class_stack:
             item = stack.pop()
+            # Emit accumulated properties for this class
+            prop_members = self._emit_properties(f"{item.name}.")
+            item.members.extend(prop_members)
             self.symbols[item.symbol_index] = Symbol(
                 item.name,
                 Class(item.name, tuple(item.members)),
@@ -495,14 +579,13 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
             else:
                 known_name = None
 
-            if "overload" in decorators:
+            # Check for property getter/setter/deleter
+            prop_role = self._detect_property_role(node, decorators)
+            if prop_role is not None:
+                self._record_property(node, name, prop_role)
+            elif "overload" in decorators:
                 self._overload_map[name].append(
                     self._callable_signature(node, known_name),
-                )
-            elif "property" in decorators or "cached_property" in decorators:
-                self._add_symbol(
-                    node.name,
-                    Expr.from_annotation(node.returns, self._qualified_name),
                 )
             else:
                 if overload_list := self._overload_map.pop(name, None):
@@ -531,6 +614,8 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
                 self.symbols.append(
                     Symbol(name, Function(name, (overloads[0], *overloads[1:]))),
                 )
+        # Emit any remaining module-level properties
+        self._emit_properties()
 
     @override
     def visit_AnnAssign(self, node: cst.AnnAssign) -> None:

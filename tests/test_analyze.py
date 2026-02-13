@@ -12,6 +12,7 @@ from typestats.analyze import (
     Overload,
     Param,
     ParamKind,
+    Property,
     collect_symbols,
     is_annotated,
 )
@@ -726,3 +727,89 @@ class TestIsAnnotated:
             ),
         )
         assert is_annotated(func)
+
+
+class TestProperties:
+    def test_getter_only(self) -> None:
+        src = textwrap.dedent("""
+        class Foo:
+            @property
+            def bar(self) -> int:
+                return 42
+        """)
+        module = collect_symbols(src)
+        symbols = {s.name: s.type_ for s in module.symbols}
+        assert isinstance(symbols["Foo.bar"], Property)
+        assert str(symbols["Foo.bar"].getter) == "int"
+        assert symbols["Foo.bar"].setter is None
+        assert not symbols["Foo.bar"].has_deleter
+
+    def test_getter_setter(self) -> None:
+        src = textwrap.dedent("""
+        class Foo:
+            @property
+            def bar(self) -> int:
+                return self._bar
+
+            @bar.setter
+            def bar(self, value: str) -> None:
+                self._bar = int(value)
+        """)
+        module = collect_symbols(src)
+        symbols = {s.name: s.type_ for s in module.symbols}
+        prop = symbols["Foo.bar"]
+        assert isinstance(prop, Property)
+        assert str(prop.getter) == "int"
+        assert prop.setter is not None
+        assert str(prop.setter) == "str"
+
+    def test_getter_setter_deleter(self) -> None:
+        src = textwrap.dedent("""
+        class Foo:
+            @property
+            def bar(self) -> int:
+                return self._bar
+
+            @bar.setter
+            def bar(self, value: int) -> None:
+                self._bar = value
+
+            @bar.deleter
+            def bar(self) -> None:
+                del self._bar
+        """)
+        module = collect_symbols(src)
+        symbols = {s.name: s.type_ for s in module.symbols}
+        prop = symbols["Foo.bar"]
+        assert isinstance(prop, Property)
+        assert prop.has_deleter
+
+    def test_cached_property(self) -> None:
+        src = textwrap.dedent("""
+        from functools import cached_property
+
+        class Foo:
+            @cached_property
+            def bar(self) -> int:
+                return 42
+        """)
+        module = collect_symbols(src)
+        symbols = {s.name: s.type_ for s in module.symbols}
+        assert isinstance(symbols["Foo.bar"], Property)
+        assert str(symbols["Foo.bar"].getter) == "int"
+
+    def test_property_is_annotated(self) -> None:
+        assert is_annotated(Property("x", Expr(cst.Name("int"))))
+        assert not is_annotated(Property("x", UNKNOWN))
+
+    def test_property_as_class_member(self) -> None:
+        src = textwrap.dedent("""
+        class Foo:
+            @property
+            def bar(self) -> int:
+                return 42
+        """)
+        module = collect_symbols(src)
+        cls = next(s.type_ for s in module.symbols if s.name == "Foo")
+        assert isinstance(cls, Class)
+        assert any(isinstance(m, Property) for m in cls.members)
