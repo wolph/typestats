@@ -225,6 +225,26 @@ def sources_to_module_paths(
     init_files = frozenset(p for p in source_paths if _RE_INIT.match(p.name))
     init_dirs = frozenset(p.parent for p in init_files)
 
+    def _in_namespace_package(source: anyio.Path) -> bool:
+        """True when *source* sits in a directory without ``__init__`` that is
+        nested inside a proper package directory.  Such directories are not
+        importable (e.g. vendored third-party code) and should be excluded."""
+
+        if (parent := source.parent) in init_dirs:
+            return False
+
+        # Walk up and check whether any ancestor is a package directory.
+        current = parent.parent
+        while current != parent:
+            if current in init_dirs:
+                return True
+            parent = current
+            current = current.parent
+        return False
+
+    # Exclude files that live in non-package subdirectories of a package
+    source_paths = [p for p in source_paths if not _in_namespace_package(p)]
+
     def _module_path(source: anyio.Path) -> str:
         parts = deque[str]()
         current_dir = source.parent

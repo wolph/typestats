@@ -78,6 +78,36 @@ def test_sources_to_module_paths_package_and_module() -> None:
     assert result["single"] == frozenset({anyio.Path("single.py")})
 
 
+def test_sources_to_module_paths_excludes_non_package_subdirs() -> None:
+    """Files in directories without __init__ nested inside a package are excluded."""
+    pkg = anyio.Path("numpy")
+    linalg = pkg / "linalg"
+    vendored = linalg / "lapack_lite"
+
+    result = sources_to_module_paths([
+        pkg / "__init__.py",
+        linalg / "__init__.py",
+        linalg / "linalg.py",
+        # These are in a non-package subdir (no __init__.py in lapack_lite/)
+        vendored / "clapack_scrub.py",
+        vendored / "fortran.py",
+        vendored / "make_lite.py",
+        # This stub sits alongside the directory, not inside it
+        linalg / "lapack_lite.pyi",
+    ])
+
+    # The vendored files should be excluded
+    assert all("clapack_scrub" not in k for k in result)
+    assert all("fortran" not in k for k in result)
+    assert all("make_lite" not in k for k in result)
+    # The stub file at the package level should remain
+    assert "numpy.linalg.lapack_lite" in result
+    # Normal package contents should remain
+    assert "numpy" in result
+    assert "numpy.linalg" in result
+    assert "numpy.linalg.linalg" in result
+
+
 def test_sources_to_module_paths_stubs_only() -> None:
     stubs = anyio.Path("proj-stubs")
 
