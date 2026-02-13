@@ -483,8 +483,10 @@ class _SymbolResolver:
             elif symbols.exports_explicit is not None and name not in import_map:
                 # Name listed in __all__ but not resolvable locally or via
                 # imports (e.g. provided by a module-level __getattr__).
-                # Treat as UNKNOWN so it matches type-checker behaviour.
-                exports[name] = analyze.Symbol(name, analyze.UNKNOWN)
+                # Use the __getattr__ return type when available, otherwise
+                # fall back to UNKNOWN.
+                fallback = symbols.getattr_return or analyze.UNKNOWN
+                exports[name] = analyze.Symbol(name, fallback)
         return exports
 
     def resolve_all(self) -> None:

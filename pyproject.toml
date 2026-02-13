@@ -40,6 +40,7 @@ test = [
   "private-reexport",
   "private-reexport-pyi",
   "stub-typed-private",
+  "module-getattr",
 ]
 dev = [
   { include-group = "test" },
@@ -53,6 +54,7 @@ public-project = { workspace = true }
 private-reexport = { workspace = true }
 private-reexport-pyi = { workspace = true }
 stub-typed-private = { workspace = true }
+module-getattr = { workspace = true }
 
 [tool.uv.workspace]
 members = [
@@ -60,6 +62,7 @@ members = [
   "tests/fixtures/private_reexport",
   "tests/fixtures/private_reexport_pyi",
   "tests/fixtures/stub_typed_private",
+  "tests/fixtures/module_getattr",
 ]
 
 # pytest

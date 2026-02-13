@@ -245,6 +245,7 @@ class ModuleSymbols:
     symbols: tuple[Symbol, ...]
     type_aliases: tuple[TypeAlias, ...]
     ignore_comments: tuple[IgnoreComment, ...]
+    getattr_return: TypeForm | None = None  # module-level __getattr__ return type
 
 
 def _extract_names(expr: cst.BaseExpression) -> list[cst.Name]:
@@ -323,6 +324,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         self._function_depth = 0
         self._overload_map = defaultdict(list)
         self._added_functions = set()
+        self.module_getattr_return: TypeForm | None = None
 
     def _get_qualified_names(self, node: cst.CSTNode) -> Collection[QualifiedName]:
         return self.get_metadata(QualifiedNameProvider, node, default=set())
@@ -515,6 +517,11 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
                 self._added_functions.add(name)
                 if self._class_stack:
                     self._class_stack[-1].members.append(func)
+
+            # Detect module-level __getattr__ (not inside a class)
+            if node.name.value == "__getattr__" and not self._class_stack:
+                ret = Expr.from_annotation(node.returns, self._qualified_name)
+                self.module_getattr_return = ret if ret is not UNKNOWN else None
 
         self._function_depth += 1
         return True
@@ -833,6 +840,7 @@ def collect_symbols(
         exports_explicit_dynamic=tuple(exports_visitor.all_sources),
         exports_implicit=reexports,
         ignore_comments=tuple(type_ignore_visitor.comments),
+        getattr_return=symbol_visitor.module_getattr_return,
     )
 
 

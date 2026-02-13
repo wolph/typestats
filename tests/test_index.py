@@ -264,3 +264,19 @@ def test_collect_public_symbols_same_name_module_not_unknown() -> None:
 
     assert "mylib.do_mul" in types
     assert types["mylib.do_mul"] is not analyze.UNKNOWN
+
+
+def test_collect_public_symbols_module_getattr_return_type() -> None:
+    """Names in __all__ unresolvable locally should use __getattr__ return type."""
+    types = _public_symbol_types(_FIXTURES / "module_getattr")
+
+    # dynamic_a is imported explicitly, so it should be resolved normally
+    assert "getattr_pkg.dynamic_a" in types
+    assert types["getattr_pkg.dynamic_a"] is not analyze.UNKNOWN
+
+    # dynamic_b is listed in __all__ but not defined anywhere resolvable;
+    # the module has __getattr__ -> int, so it should get that return type
+    # instead of UNKNOWN
+    assert "getattr_pkg.dynamic_b" in types
+    assert types["getattr_pkg.dynamic_b"] is not analyze.UNKNOWN
+    assert str(types["getattr_pkg.dynamic_b"]) == "int"

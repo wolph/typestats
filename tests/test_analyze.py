@@ -726,3 +726,45 @@ class TestIsAnnotated:
             ),
         )
         assert is_annotated(func)
+
+
+class TestModuleGetattr:
+    def test_getattr_return_populated(self) -> None:
+        """Module-level __getattr__ should populate getattr_return."""
+        src = textwrap.dedent("""
+        def __getattr__(name: str) -> int:
+            ...
+        """)
+        module = collect_symbols(src)
+        assert module.getattr_return is not None
+        assert str(module.getattr_return) == "int"
+
+    def test_getattr_return_none_without_getattr(self) -> None:
+        """A module without __getattr__ should have getattr_return = None."""
+        src = textwrap.dedent("""
+        x: int = 1
+
+        def f() -> None:
+            pass
+        """)
+        module = collect_symbols(src)
+        assert module.getattr_return is None
+
+    def test_class_getattr_does_not_set_module_getattr(self) -> None:
+        """A class-level __getattr__ should NOT set getattr_return."""
+        src = textwrap.dedent("""
+        class Foo:
+            def __getattr__(self, name: str) -> int:
+                ...
+        """)
+        module = collect_symbols(src)
+        assert module.getattr_return is None
+
+    def test_getattr_without_return_annotation(self) -> None:
+        """__getattr__ without a return annotation should not set getattr_return."""
+        src = textwrap.dedent("""
+        def __getattr__(name: str):
+            ...
+        """)
+        module = collect_symbols(src)
+        assert module.getattr_return is None

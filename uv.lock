@@ -4,6 +4,7 @@ requires-python = ">=3.14"
 
 [manifest]
 members = [
+    "module-getattr",
     "private-reexport",
     "private-reexport-pyi",
     "public-project",
@@ -179,6 +180,11 @@ sdist = { url = "https://files.pythonhosted.org/packages/d0/d6/e194355f8df0caee4
 wheels = [
     { url = "https://files.pythonhosted.org/packages/56/a6/61defba8bd47df1ff3935a83b4e2543f446e4450d2686b3f0429e92065a7/mainpy-1.5.0-py3-none-any.whl", hash = "sha256:6575b02777a7e8e7183197bf45192a2b4dcdd01bd2c2811ac8f800c455bbc3ed", size = 5948, upload-time = "2025-10-07T20:43:02.544Z" },
 ]
+
+[[package]]
+name = "module-getattr"
+version = "0.1.0"
+source = { editable = "tests/fixtures/module_getattr" }
 
 [[package]]
 name = "multidict"
@@ -411,6 +417,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "dprint-py" },
+    { name = "module-getattr" },
     { name = "private-reexport" },
     { name = "private-reexport-pyi" },
     { name = "public-project" },
@@ -420,6 +427,7 @@ dev = [
     { name = "stub-typed-private" },
 ]
 test = [
+    { name = "module-getattr" },
     { name = "private-reexport" },
     { name = "private-reexport-pyi" },
     { name = "public-project" },
@@ -441,6 +449,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "dprint-py", specifier = ">=0.51.1.0" },
+    { name = "module-getattr", editable = "tests/fixtures/module_getattr" },
     { name = "private-reexport", editable = "tests/fixtures/private_reexport" },
     { name = "private-reexport-pyi", editable = "tests/fixtures/private_reexport_pyi" },
     { name = "public-project", editable = "tests/fixtures/public_project" },
@@ -450,6 +459,7 @@ dev = [
     { name = "stub-typed-private", editable = "tests/fixtures/stub_typed_private" },
 ]
 test = [
+    { name = "module-getattr", editable = "tests/fixtures/module_getattr" },
     { name = "private-reexport", editable = "tests/fixtures/private_reexport" },
     { name = "private-reexport-pyi", editable = "tests/fixtures/private_reexport_pyi" },
     { name = "public-project", editable = "tests/fixtures/public_project" },
