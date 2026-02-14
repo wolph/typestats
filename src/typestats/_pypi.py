@@ -5,12 +5,12 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, TypedDict
 
 import anyio
 import anyio.to_thread
-import httpx
 import mainpy
 from packaging.utils import parse_sdist_filename
 from yarl import URL
 
 if TYPE_CHECKING:
+    import httpx
     from _typeshed import StrPath
 
 
@@ -173,5 +173,7 @@ async def download_sdist_latest(
 
 @mainpy.main
 async def example() -> None:
-    async with httpx.AsyncClient(http2=True) as client:
+    from typestats._http import retry_client  # noqa: PLC0415
+
+    async with retry_client() as client:
         await download_sdist_latest(client, "optype", "./projects")
