@@ -10,6 +10,7 @@ from packaging.utils import parse_sdist_filename
 from yarl import URL
 
 if TYPE_CHECKING:
+    import httpx
     from _typeshed import StrPath
 
 
