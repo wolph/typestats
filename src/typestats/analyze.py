@@ -42,11 +42,6 @@ _ENUM_BASES: Final[frozenset[str]] = frozenset({
 })
 _KNOWN_ATTRS_BASES: Final[frozenset[str]] = frozenset({"NamedTuple", "TypedDict"})
 _DATACLASS_DECORATORS: Final[frozenset[str]] = frozenset({"dataclass"})
-_IMPLICIT_CLASSMETHODS: Final[frozenset[str]] = frozenset({
-    "__new__",
-    "__init_subclass__",
-    "__class_getitem__",
-})
 _SPECIAL_TYPEFORMS: Final[frozenset[str]] = frozenset({
     "namedtuple",
     "NewType",
@@ -101,8 +96,8 @@ def is_annotated(type_: TypeForm, /) -> bool:
     """Check if a type form represents a meaningfully annotated symbol.
 
     Returns ``False`` for ``UNKNOWN``, ``KNOWN``, ``EXTERNAL``, and for
-    ``Function`` types where every parameter (other than *self*/*cls*) and
-    the return type are ``UNKNOWN``.
+    ``Function`` types where every parameter and the return type are
+    ``UNKNOWN``.  Note: *self*/*cls* parameters are excluded during parsing.
 
     For ``Class`` types, the class is only considered annotated when **all**
     of its members (stored in ``Class.members``) are also annotated.
@@ -117,10 +112,7 @@ def is_annotated(type_: TypeForm, /) -> bool:
         case Function(overloads=overloads):
             return any(
                 overload.returns is not UNKNOWN
-                or any(
-                    param.annotation is not UNKNOWN and param.annotation is not KNOWN
-                    for param in overload.params
-                )
+                or any(param.annotation is not UNKNOWN for param in overload.params)
                 for overload in overloads
             )
         case _:
@@ -164,10 +156,7 @@ class Param:
 
     @override
     def __str__(self) -> str:
-        out = f"{self.kind.prefix()}{self.name}"
-        if self.annotation is not KNOWN:
-            out = f"{out}: {self.annotation}"
-        return out
+        return f"{self.kind.prefix()}{self.name}: {self.annotation}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,15 +171,9 @@ class Overload:
 
     @property
     def annotation_counts(self) -> tuple[int, int]:
-        """``(annotated, annotatable)`` counts for non-self/cls params + return."""
-        annotated = 0
-        annotatable = 0
-        for p in self.params:
-            if p.annotation is not KNOWN:
-                annotatable += 1
-                if p.annotation is not UNKNOWN:
-                    annotated += 1
-        annotatable += 1
+        """``(annotated, annotatable)`` counts for params + return."""
+        annotated = sum(1 for p in self.params if p.annotation is not UNKNOWN)
+        annotatable = len(self.params) + 1  # params + return
         if self.returns is not UNKNOWN:
             annotated += 1
         return annotated, annotatable
@@ -465,17 +448,12 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
             ),
         )
 
-    def _param(
-        self,
-        param: cst.Param,
-        kind: ParamKind,
-        known_name: str | None = None,
-    ) -> Param:
-        if known_name and not param.annotation and param.name.value == known_name:
-            ty = KNOWN
-        else:
-            ty = Expr.from_annotation(param.annotation, self._qualified_name)
-        return Param(param.name.value, kind, ty)
+    def _param(self, param: cst.Param, kind: ParamKind) -> Param:
+        return Param(
+            param.name.value,
+            kind,
+            Expr.from_annotation(param.annotation, self._qualified_name),
+        )
 
     def _add_symbol(self, name_node: cst.Name, annotation: TypeForm) -> None:
         self.symbols.append(Symbol(self._symbol_name(name_node), annotation))
@@ -485,9 +463,11 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
     def _callable_signature(
         self,
         node: cst.FunctionDef,
-        known_name: str | None = None,
+        *,
+        skip_first: bool = False,
     ) -> Overload:
         params: list[Param] = []
+        skipped = False
         for node_params, kind in [
             (node.params.posonly_params, ParamKind.POSITIONAL_ONLY),
             (node.params.params, ParamKind.POSITIONAL_OR_KEYWORD),
@@ -495,11 +475,20 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
             ((node.params.star_arg,), ParamKind.VAR_POSITIONAL),
             ((node.params.star_kwarg,), ParamKind.VAR_KEYWORD),
         ]:
-            params.extend(
-                self._param(param, kind, known_name)
-                for param in node_params
-                if isinstance(param, cst.Param)
-            )
+            for param in node_params:
+                if not isinstance(param, cst.Param):
+                    continue
+                if (
+                    skip_first
+                    and not skipped
+                    and (
+                        kind
+                        in {ParamKind.POSITIONAL_ONLY, ParamKind.POSITIONAL_OR_KEYWORD}
+                    )
+                ):
+                    skipped = True
+                    continue
+                params.append(self._param(param, kind))
 
         return Overload(
             tuple(params),
@@ -545,19 +534,11 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
             }
             name = self._symbol_name(node.name)
 
-            if self._class_stack and "staticmethod" not in decorators:
-                # TODO(@jorenham): don't rely on name-based heuristic for self/cls
-                is_cls = (
-                    "classmethod" in decorators
-                    or node.name.value in _IMPLICIT_CLASSMETHODS
-                )
-                known_name = "cls" if is_cls else "self"
-            else:
-                known_name = None
+            skip_first = bool(self._class_stack) and "staticmethod" not in decorators
 
             if "overload" in decorators:
                 self._overload_map[name].append(
-                    self._callable_signature(node, known_name),
+                    self._callable_signature(node, skip_first=skip_first),
                 )
             elif "property" in decorators or "cached_property" in decorators:
                 self._add_symbol(
@@ -568,7 +549,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
                 if overload_list := self._overload_map.pop(name, None):
                     overloads = overload_list[0], *overload_list[1:]
                 else:
-                    overloads = (self._callable_signature(node, known_name),)
+                    overloads = (self._callable_signature(node, skip_first=skip_first),)
 
                 func = Function(name, overloads)
                 self.symbols.append(Symbol(name, func))

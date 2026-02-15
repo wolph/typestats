@@ -615,7 +615,6 @@ class TestIsAnnotated:
                     (
                         Overload(
                             (
-                                Param("self", ParamKind.POSITIONAL_OR_KEYWORD, KNOWN),
                                 Param(
                                     "x",
                                     ParamKind.POSITIONAL_OR_KEYWORD,
@@ -640,7 +639,6 @@ class TestIsAnnotated:
                     (
                         Overload(
                             (
-                                Param("cls", ParamKind.POSITIONAL_OR_KEYWORD, KNOWN),
                                 Param(
                                     "input_array",
                                     ParamKind.POSITIONAL_OR_KEYWORD,
@@ -680,15 +678,12 @@ class TestIsAnnotated:
         assert not is_annotated(func)
 
     def test_function_self_only(self) -> None:
-        """A method with only self/cls inferred should not be considered annotated."""
+        """A method with only self/cls (excluded) should not be annotated."""
         func = Function(
             "f",
             (
                 Overload(
-                    (
-                        Param("self", ParamKind.POSITIONAL_OR_KEYWORD, KNOWN),
-                        Param("x", ParamKind.POSITIONAL_OR_KEYWORD, UNKNOWN),
-                    ),
+                    (Param("x", ParamKind.POSITIONAL_OR_KEYWORD, UNKNOWN),),
                     UNKNOWN,
                 ),
             ),
@@ -730,9 +725,10 @@ class TestIsAnnotated:
 
 
 class TestImplicitClassmethodDunders:
-    """__new__, __init_subclass__, and __class_getitem__ use cls, not self."""
+    """__new__, __init_subclass__, __class_getitem__, and regular methods
+    should all have their self/cls parameter excluded from the param list."""
 
-    def test_new_cls_known(self) -> None:
+    def test_new_cls_excluded(self) -> None:
         src = textwrap.dedent("""
         class Foo:
             def __new__(cls): ...
@@ -740,11 +736,9 @@ class TestImplicitClassmethodDunders:
         module = collect_symbols(src)
         func = next(s.type_ for s in module.symbols if s.name == "Foo.__new__")
         assert isinstance(func, Function)
-        param = func.overloads[0].params[0]
-        assert param.name == "cls"
-        assert param.annotation is KNOWN
+        assert func.overloads[0].params == ()
 
-    def test_init_subclass_cls_known(self) -> None:
+    def test_init_subclass_cls_excluded(self) -> None:
         src = textwrap.dedent("""
         class Foo:
             def __init_subclass__(cls): ...
@@ -754,11 +748,9 @@ class TestImplicitClassmethodDunders:
             s.type_ for s in module.symbols if s.name == "Foo.__init_subclass__"
         )
         assert isinstance(func, Function)
-        param = func.overloads[0].params[0]
-        assert param.name == "cls"
-        assert param.annotation is KNOWN
+        assert func.overloads[0].params == ()
 
-    def test_class_getitem_cls_known(self) -> None:
+    def test_class_getitem_cls_excluded(self) -> None:
         src = textwrap.dedent("""
         class Foo:
             def __class_getitem__(cls, item): ...
@@ -768,12 +760,11 @@ class TestImplicitClassmethodDunders:
             s.type_ for s in module.symbols if s.name == "Foo.__class_getitem__"
         )
         assert isinstance(func, Function)
-        param = func.overloads[0].params[0]
-        assert param.name == "cls"
-        assert param.annotation is KNOWN
+        assert len(func.overloads[0].params) == 1
+        assert func.overloads[0].params[0].name == "item"
 
-    def test_regular_method_self_known(self) -> None:
-        """Regular methods should still use self, not cls."""
+    def test_regular_method_self_excluded(self) -> None:
+        """Regular methods should have self excluded."""
         src = textwrap.dedent("""
         class Foo:
             def bar(self): ...
@@ -781,9 +772,7 @@ class TestImplicitClassmethodDunders:
         module = collect_symbols(src)
         func = next(s.type_ for s in module.symbols if s.name == "Foo.bar")
         assert isinstance(func, Function)
-        param = func.overloads[0].params[0]
-        assert param.name == "self"
-        assert param.annotation is KNOWN
+        assert func.overloads[0].params == ()
 
 
 class TestAnnotationCounts:
@@ -849,13 +838,12 @@ class TestAnnotationCounts:
         assert annotation_counts(func) == (1, 3)
 
     def test_function_self_excluded(self) -> None:
-        """self/cls params marked KNOWN don't count as annotatable."""
+        """self/cls params are excluded entirely, so only x + return count."""
         func = Function(
             "f",
             (
                 Overload(
                     (
-                        Param("self", ParamKind.POSITIONAL_OR_KEYWORD, KNOWN),
                         Param(
                             "x",
                             ParamKind.POSITIONAL_OR_KEYWORD,
@@ -916,10 +904,7 @@ class TestAnnotationCounts:
                     "bar",
                     (
                         Overload(
-                            (
-                                Param("self", ParamKind.POSITIONAL_OR_KEYWORD, KNOWN),
-                                Param("x", ParamKind.POSITIONAL_OR_KEYWORD, UNKNOWN),
-                            ),
+                            (Param("x", ParamKind.POSITIONAL_OR_KEYWORD, UNKNOWN),),
                             Expr(cst.Name("None")),
                         ),
                     ),
