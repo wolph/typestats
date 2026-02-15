@@ -145,24 +145,27 @@ def test_sources_to_module_paths_stubs_extra() -> None:
 def test_collect_public_symbols_respects_imports() -> None:
     names = _public_symbol_names(_PROJECT)
 
-    assert "pkg.public_func" in names
     assert "pkg.__version__" in names
     assert "pkg.a.public_func" in names
-    assert "pkg.b" in names
-    assert "pkg.spam" in names
+    assert "pkg.a._private_func" in names  # in pkg.__all__, traced to origin
+    assert "pkg.a.spam" in names
+    assert "pkg.b" not in names  # module reference, skipped
+    assert "pkg._b.spam" in names  # origin of pkg's re-export
+    assert "pkg.sin" in names  # EXTERNAL
 
-    assert "pkg._private_func" not in names
+    assert "pkg.public_func" not in names  # attributed to origin pkg.a
+    assert "pkg.spam" not in names  # attributed to origin pkg._b
+    assert "pkg._private_func" not in names  # attributed to origin pkg.a
     assert "pkg.ext" not in names
-    assert "pkg._b.spam" not in names
 
 
 def test_collect_public_symbols_implicit_reexports() -> None:
     names = _public_symbol_names(_PROJECT)
 
     assert "pkg.a.spam" in names
-    assert "pkg.api.spam" in names
     assert "pkg.api.__version__" in names
 
+    assert "pkg.api.spam" not in names  # attributed to origin pkg.a.spam
     assert "pkg.api.a" not in names
     assert "pkg.api.public_func" not in names
 
@@ -171,16 +174,16 @@ def test_collect_public_symbols_explicit_private_reexports() -> None:
     names = _public_symbol_names(_PROJECT)
 
     assert "mylib.__version__" in names
-    assert "mylib.CanAdd" in names
-    assert "mylib.CanSub" in names
-    assert "mylib.do_add" in names
-    assert "mylib.do_mul" in names
+    assert "mylib._core._can.CanAdd" in names
+    assert "mylib._core._can.CanSub" in names
+    assert "mylib._core._do.do_add" in names
+    assert "mylib._core._ops.do_mul.do_mul" in names
 
-    assert "mylib._core._can.CanAdd" not in names
-    assert "mylib._core._can.CanSub" not in names
-    assert "mylib._core._do.do_add" not in names
-    assert "mylib._core._ops.do_mul" not in names
-    assert "mylib._core.CanAdd" not in names
+    assert "mylib.CanAdd" not in names  # attributed to origin
+    assert "mylib.CanSub" not in names
+    assert "mylib.do_add" not in names
+    assert "mylib.do_mul" not in names
+    assert "mylib._core.CanAdd" not in names  # intermediate, not origin
     assert "mylib._core.CanSub" not in names
     assert "mylib._core.do_add" not in names
     assert "mylib._core.do_mul" not in names
@@ -191,15 +194,16 @@ def test_collect_public_symbols_pyi_relative_imports() -> None:
     names = _public_symbol_names(_PROJECT)
 
     # The .pyi stub uses relative imports (from ._core._can import CanAdd)
-    # and has an explicit __all__; all listed symbols should be public.
+    # and has an explicit __all__; symbols are traced to their origin.
     assert "mylib_pyi.__version__" in names
-    assert "mylib_pyi.CanAdd" in names
-    assert "mylib_pyi.CanSub" in names
-    assert "mylib_pyi.do_add" in names
+    assert "mylib_pyi._core._can.CanAdd" in names
+    assert "mylib_pyi._core._can.CanSub" in names
+    assert "mylib_pyi._core._do.do_add" in names
 
-    # Private module symbols should not leak
-    assert "mylib_pyi._core._can.CanAdd" not in names
-    assert "mylib_pyi._core._do.do_add" not in names
+    # Re-exporting module names should not appear
+    assert "mylib_pyi.CanAdd" not in names
+    assert "mylib_pyi.CanSub" not in names
+    assert "mylib_pyi.do_add" not in names
 
 
 def _public_symbol_types(project_dir: Path) -> dict[str, analyze.TypeForm]:
@@ -229,19 +233,20 @@ def test_collect_public_symbols_pyi_stub_types_not_unknown() -> None:
     """Symbols typed only in .pyi stubs should not be reported as UNKNOWN."""
     types = _public_symbol_types(_PROJECT)
 
-    assert "stubpkg.AnnotatedAlias" in types
-    assert "stubpkg.GenericType" in types
-    assert types["stubpkg.AnnotatedAlias"] is not analyze.UNKNOWN
-    assert types["stubpkg.GenericType"] is not analyze.UNKNOWN
+    assert "stubpkg._typeforms.AnnotatedAlias" in types
+    assert "stubpkg._typeforms.GenericType" in types
+    assert types["stubpkg._typeforms.AnnotatedAlias"] is not analyze.UNKNOWN
+    assert types["stubpkg._typeforms.GenericType"] is not analyze.UNKNOWN
 
 
 def test_collect_public_symbols_unresolved_all_names_unknown() -> None:
     """Names in __all__ that can't be resolved should be UNKNOWN."""
     types = _public_symbol_types(_PROJECT)
 
-    # spam is imported from _b and should be resolved normally
-    assert "pkg.lazy.spam" in types
-    assert types["pkg.lazy.spam"] is not analyze.UNKNOWN
+    # spam is imported from _b; origin is pkg._b.spam
+    assert "pkg._b.spam" in types
+    assert types["pkg._b.spam"] is not analyze.UNKNOWN
+    assert "pkg.lazy.spam" not in types  # attributed to origin
 
     # dynamic_a and dynamic_b are listed in __all__ but not defined
     # anywhere resolvable, so they should be UNKNOWN
@@ -256,12 +261,10 @@ def test_collect_public_symbols_same_name_module_not_unknown() -> None:
     """Functions re-exported from a submodule with the same name should not be UNKNOWN.
 
     When `from ._private import func` is used, and `_private` re-exports `func`
-    from a submodule also named `func` (e.g. `_private/func.py`), the import
-    target matches both a module path and a symbol name. The resolver should
-    recognise the re-exported symbol rather than treating it as a private module
-    import.
+    from a submodule also named `func` (e.g. `_private/func.py`), the import chain
+    is followed to the original definition.
     """
     types = _public_symbol_types(_PROJECT)
 
-    assert "mylib.do_mul" in types
-    assert types["mylib.do_mul"] is not analyze.UNKNOWN
+    assert "mylib._core._ops.do_mul.do_mul" in types
+    assert types["mylib._core._ops.do_mul.do_mul"] is not analyze.UNKNOWN
