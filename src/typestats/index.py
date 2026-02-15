@@ -36,9 +36,9 @@ _EXCLUDED_DIR_NAMES: Final[frozenset[str]] = frozenset({
     "tools",
 })
 # File names to exclude from analysis.
-_EXCLUDED_FILE_NAMES: Final[frozenset[str]] = frozenset({
-    "conftest.py",
-})
+_EXCLUDED_FILE_NAMES: Final[frozenset[str]] = frozenset({"conftest.py"})
+# Module-level dunder names that are not real symbols for typing purposes.
+_MODULE_DUNDERS: Final[frozenset[str]] = frozenset({"__all__", "__doc__"})
 
 
 def _is_public(name: str) -> bool:
@@ -314,6 +314,8 @@ async def collect_public_symbols(  # noqa: C901, PLR0912, PLR0915
             names = {n for n in {*local, *implicit} if _is_public(n)}
         else:
             names = {n for n in {*local, *import_map} if _is_public(n) and n != "*"}
+
+        names -= _MODULE_DUNDERS
 
         result: dict[str, str] = {}
         for name in names:
