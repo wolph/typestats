@@ -16,13 +16,14 @@ For a given PyPI project the tool runs an end-to-end pipeline:
 
 1. **Fetch** — download the latest sdist from PyPI (and any companion stub package).
 2. **Graph** — compute the import graph via `ruff analyze graph`.
-3. **Filter** — topologically sort modules and keep only those reachable from public entry-points
-   (skip tests, benchmarks, docs, vendored code, etc.).
+3. **Filter** — keep only modules reachable from public entry-points (skip tests, benchmarks,
+   docs, vendored code, etc.).
 4. **Parse** — use `libcst` to extract every annotatable symbol (variables, functions, methods,
    classes, properties, overloads, aliases, etc.) together with its type annotation (or lack
-   thereof).
-5. **Resolve** — follow imports across modules with iterative fixed-point resolution to determine
-   the final public API and each symbol's annotation status.
+   thereof), building a flat symbol table of all local definitions.
+5. **Resolve** — compute each public module's exports, tracing re-export chains back to their
+   origin definition. Symbols are attributed to the source file where they are defined, not where
+   they are re-exported.
 6. **Measure** — compute coverage and other statistics.
 7. **Export** — output the results for consumption by a website or dashboard.
 
@@ -34,7 +35,7 @@ For a given PyPI project the tool runs an end-to-end pipeline:
 | `_ruff.py`        | Subprocess wrapper around `ruff analyze graph`                                    |
 | `_typeshed.py`    | Typeshed-related helpers                                                          |
 | `analyze.py`      | `libcst`-based per-file symbol extraction (annotations, overloads, classes, etc.) |
-| `index.py`        | Cross-module import resolution, public API construction, fixed-point convergence  |
+| `index.py`        | Cross-module import resolution, public API construction, origin-based attribution |
 | `typecheckers.py` | Detection of type-checker configs and strictness flags                            |
 
 ## Conventions

@@ -16,27 +16,26 @@ For a given project:
 3. TODO: If there exists a `types-{project}` or `{project}-stubs` package on PyPI, repeat steps
    1-2 for that package, and merge the stubs into the main package source tree.
 4. Compute the import graph using `ruff analyze graph`
-5. Best-effort topological sort of the import graph (cycles are broken gracefully)
-6. Filter to files transitively reachable from public modules (skip tests, tools, etc.)
-7. For each reachable file, parse it using `libcst`, and extract:
+5. Filter to files transitively reachable from public modules (skip tests, tools, etc.)
+6. For each reachable file, parse it using `libcst`, and extract:
    - all annotatable global symbols and their type annotations
    - the `__all__` exports (if defined)
    - imports and implicit re-exports (i.e. `from a import b as b`)
    - type aliases (`_: TypeAlias = ...` and `type _ = ...`)
    - type-ignore comments (`# (type|pyright|pyrefly|ty): ignore`)
    - overloaded functions/methods
-8. TODO: Inline type aliases where used in annotations (so we can determine the `Any`-ness)
-9. TODO: Unify `.py` and `.pyi` annotations for each symbol
-10. Resolve public symbols via iterative fixed-point (handles import cycles)
-11. Collect the type-checker configs to see which strictness flags are used and which
+7. TODO: Inline type aliases where used in annotations (so we can determine the `Any`-ness)
+8. TODO: Unify `.py` and `.pyi` annotations for each symbol
+9. Resolve public symbols via origin-tracing (follow re-export chains to their defining module)
+10. Collect the type-checker configs to see which strictness flags are used and which
     type-checkers it supports (mypy, (based)pyright, pyrefly, ty, zuban)
-12. TODO: Compute various statistics:
+11. TODO: Compute various statistics:
     - coverage (% of public symbols annotated)
     - strict coverage (% of public symbols annotated without `Any`)
     - average overload ratio (function without overloads counts as 1 overload)
     - supported type-checkers + strictness flags
       annotation kind (inline, bundled stubs, typeshed stubs, third-party stubs, etc)
-13. TODO: Export the statistics for use in a website/dashboard (e.g. json, csv, or sqlite)
+12. TODO: Export the statistics for use in a website/dashboard (e.g. json, csv, or sqlite)
 
 ### Symbol collection
 
@@ -70,8 +69,7 @@ Per-module (via `libcst`):
 
 Cross-module (via import graph):
 
-- **Import graph**: `ruff analyze graph` with/without `TYPE_CHECKING` branches; import cycles handled
-  gracefully via best-effort topological sort and iterative fixed-point resolution
+- **Import graph**: `ruff analyze graph` with/without `TYPE_CHECKING` branches
 - **Reachability filtering**: only files transitively reachable from public modules are parsed,
   skipping tests, benchmarks, and internal tooling
 - **Excluded directories and files**: the following directories are automatically excluded from
@@ -79,7 +77,9 @@ Cross-module (via import graph):
   The file `conftest.py` is also excluded wherever it appears.
 - **Namespace package exclusion**: directories without `__init__.py` nested inside a proper package
   are excluded (e.g. vendored third-party code like `numpy/linalg/lapack_lite/`)
-- **Public symbol resolution**: follows imports across modules, iterating until convergence
+- **Origin-based symbol attribution**: public symbols are traced back through re-export chains to
+  their defining module; each symbol is attributed to its origin source file and fully qualified
+  name rather than the re-exporting module
 - **Private module re-exports**: symbols re-exported from `_private` modules via `__all__`
 - **Wildcard re-export expansion**: `from _internal import *` resolved to concrete symbols
 - **External vs unknown**: imported symbols from external packages marked `EXTERNAL`, not `UNKNOWN`,
