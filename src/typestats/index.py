@@ -3,6 +3,7 @@ import logging
 import os
 import re
 from collections import defaultdict, deque
+from itertools import chain
 from typing import TYPE_CHECKING, Final
 
 import anyio
@@ -210,7 +211,7 @@ def _is_public_module(module_path: str, /) -> bool:
     return all(not part.startswith("_") for part in module_path.split("."))
 
 
-async def collect_public_symbols(  # noqa: C901, PLR0912, PLR0915
+async def collect_public_symbols(  # noqa: C901, PLR0915
     project_dir: StrPath,
     /,
 ) -> Mapping[anyio.Path, Sequence[analyze.Symbol]]:
@@ -223,10 +224,8 @@ async def collect_public_symbols(  # noqa: C901, PLR0912, PLR0915
     sources = list(await list_sources(project_dir))
 
     # Drop .py when .pyi exists for the same file
-    pyi_set = frozenset(str(s) for s in sources if str(s).endswith(".pyi"))
-    sources = [
-        s for s in sources if not (str(s).endswith(".py") and str(s) + "i" in pyi_set)
-    ]
+    pyi_set = frozenset(str(s) for s in sources if s.suffix == ".pyi")
+    sources = [s for s in sources if not (s.suffix == ".py" and f"{s}i" in pyi_set)]
 
     module_paths = sources_to_module_paths(sources)
     top_level = frozenset(m.split(".", 1)[0] for m in module_paths)
@@ -234,26 +233,30 @@ async def collect_public_symbols(  # noqa: C901, PLR0912, PLR0915
     # Step 1: Parse all modules, build flat symbol table (fqn → (path, type))
     all_local: dict[str, tuple[anyio.Path, analyze.TypeForm]] = {}
     module_data: dict[str, dict[anyio.Path, analyze.ModuleSymbols]] = {}
+    module_locals: dict[str, dict[str, str]] = {}  # mod → {name: fqn}
     for mod, paths in module_paths.items():
         entries: dict[anyio.Path, analyze.ModuleSymbols] = {}
+        local: dict[str, str] = {}
         for path in sorted(paths, key=lambda p: not p.name.endswith(".pyi")):
             pkg = (
                 mod
                 if _RE_INIT.match(path.name)
                 else (mod.rsplit(".", 1)[0] if "." in mod else "")
             )
-            syms = analyze.collect_symbols(
-                await path.read_text(),
-                package_name=pkg,
-            )
+            syms = analyze.collect_symbols(await path.read_text(), package_name=pkg)
             entries[path] = syms
-            for alias in syms.type_aliases:
-                if "." not in alias.name:
-                    all_local.setdefault(f"{mod}.{alias.name}", (path, alias.value))
-            for sym in syms.symbols:
-                if "." not in sym.name:
-                    all_local[f"{mod}.{sym.name}"] = (path, sym.type_)
+
+            for name, type_ in chain(
+                ((a.name, a.value) for a in syms.type_aliases),
+                ((s.name, s.type_) for s in syms.symbols),
+            ):
+                if "." not in name:
+                    fqn = f"{mod}.{name}"
+                    all_local.setdefault(fqn, (path, type_))
+                    local.setdefault(name, fqn)
+
         module_data[mod] = entries
+        module_locals[mod] = local
 
     # Step 2: Compute module exports with origin tracing
     exports_cache: dict[str, dict[str, str]] = {}
@@ -279,7 +282,6 @@ async def collect_public_symbols(  # noqa: C901, PLR0912, PLR0915
         exports_cache[mod] = {}  # break cycles
 
         import_map: dict[str, str] = {}
-        local: dict[str, str] = {}
         wc_mods: list[str] = []
         explicit: frozenset[str] | None = None
         dynamic: list[str] = []
@@ -292,12 +294,8 @@ async def collect_public_symbols(  # noqa: C901, PLR0912, PLR0915
                 explicit = syms.exports_explicit
             dynamic.extend(syms.exports_explicit_dynamic)
             implicit.update(syms.exports_implicit)
-            for a in syms.type_aliases:
-                if "." not in a.name:
-                    local.setdefault(a.name, f"{mod}.{a.name}")
-            for s in syms.symbols:
-                if "." not in s.name:
-                    local[s.name] = f"{mod}.{s.name}"
+
+        local = module_locals.get(mod, {})
 
         wc: dict[str, str] = {}
         for wc_mod in wc_mods:
