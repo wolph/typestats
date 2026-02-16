@@ -50,6 +50,8 @@ _ANY_FQNS: Final[frozenset[str]] = frozenset({
     "_typeshed.sentinel",
     "_typeshed.AnnotationForm",
 })
+# FQNs that are considered equivalent to ``Any`` only in input positions.
+_PARAM_ANY_FQNS: Final[frozenset[str]] = frozenset({"builtins.object"})
 
 
 def _is_public(name: str) -> bool:
@@ -251,11 +253,16 @@ def _unfold_any(
     import_map: Mapping[str, str],
     mod: str,
     alias_targets: Mapping[str, str],
+    *,
+    is_param: bool = False,
 ) -> analyze.TypeForm:
     """Replace ``Expr`` annotations that resolve to ``Any`` with ``ANY``.
 
     Walks *type_* recursively so that function parameters, return types, and
     class members are all checked.
+
+    When *is_param* is ``True``, annotations in ``_PARAM_ANY_FQNS`` (e.g.
+    ``builtins.object``) are also replaced with ``ANY``.
     """
     match type_:
         case analyze.Expr(expr=expr):
@@ -263,6 +270,11 @@ def _unfold_any(
             if name is not None:
                 fqn = _resolve_expr_name(name, import_map, mod)
                 if _resolves_to_any(fqn, alias_targets):
+                    return analyze.ANY
+                if is_param and (
+                    fqn in _PARAM_ANY_FQNS
+                    or (name == "object" and name not in import_map)
+                ):
                     return analyze.ANY
             return type_
         case analyze.Function(name=fn_name, overloads=overloads):
@@ -272,7 +284,13 @@ def _unfold_any(
                         analyze.Param(
                             p.name,
                             p.kind,
-                            _unfold_any(p.annotation, import_map, mod, alias_targets),
+                            _unfold_any(
+                                p.annotation,
+                                import_map,
+                                mod,
+                                alias_targets,
+                                is_param=True,
+                            ),
                         )
                         for p in o.params
                     ),
