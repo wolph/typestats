@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-root = ""
-module-name = ["pkg", "mylib", "optype", "mylib_pyi", "optype_pyi", "stubpkg"]
+module-name = ["anypkg", "pkg", "mylib", "optype", "mylib_pyi", "optype_pyi", "stubpkg"]
 
 [project]
 name = "test-project"
