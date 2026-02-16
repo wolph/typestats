@@ -69,7 +69,8 @@ Per-module (via `libcst`):
 - **Aliased typing imports**: `import typing as t` resolved via `QualifiedNameProvider`
 - **`Any` detection**: annotations that resolve to `typing.Any`—whether used directly, through
   local type aliases (`type Unknown = Any`), or cross-module alias chains—are marked `ANY` and
-  tracked separately, but still count as annotated for coverage purposes
+  tracked separately, but still count as annotated for coverage purposes. The `_typeshed` aliases
+  `Incomplete`, `MaybeNone`, `sentinel`, and `AnnotationForm` are also treated as `Any`.
 
 Cross-module (via import graph):
 
