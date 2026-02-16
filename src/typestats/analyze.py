@@ -147,7 +147,7 @@ class Expr:
         expr: cst.BaseExpression,
         name_resolver: _NameResolver | None = None,
     ) -> Self:
-        return cls(_unwrap_annotated(expr, name_resolver))
+        return cls(_unwrap_annotated(_parse_string_annotation(expr), name_resolver))
 
 
 @dataclass(frozen=True, slots=True)
@@ -307,6 +307,24 @@ def _extract_names(expr: cst.BaseExpression) -> list[cst.Name]:
             return names
         case _:
             return []
+
+
+def _parse_string_annotation(expr: cst.BaseExpression) -> cst.BaseExpression:
+    """Parse a stringified annotation like ``"list[str]"`` into a CST expression.
+
+    If *expr* is a `SimpleString` or `ConcatenatedString` whose evaluated value
+    is valid Python, the parsed expression is returned.  Otherwise the original
+    *expr* is returned unchanged.
+    """
+    if not isinstance(expr, cst.SimpleString | cst.ConcatenatedString):
+        return expr
+    value = expr.evaluated_value
+    if value is None or not isinstance(value, str):
+        return expr
+    try:
+        return cst.parse_expression(value)
+    except cst.ParserSyntaxError:
+        return expr
 
 
 def _is_dunder_slots(expr: cst.BaseExpression) -> bool:

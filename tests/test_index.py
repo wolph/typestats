@@ -350,6 +350,22 @@ def test_collect_public_symbols_direct_any_is_any() -> None:
     assert types["anypkg.mod.any_var"] is analyze.ANY
 
 
+def test_collect_public_symbols_string_any_is_any() -> None:
+    """Stringified `"Any"` annotation should be detected as ANY."""
+    types = _public_symbol_types(_PROJECT)
+
+    assert "anypkg.mod.string_any_var" in types
+    assert types["anypkg.mod.string_any_var"] is analyze.ANY
+
+
+def test_collect_public_symbols_string_annotation_not_any() -> None:
+    """Stringified non-Any annotation should NOT be detected as ANY."""
+    types = _public_symbol_types(_PROJECT)
+
+    assert "anypkg.mod.string_int_var" in types
+    assert types["anypkg.mod.string_int_var"] is not analyze.ANY
+
+
 def test_collect_public_symbols_alias_to_any_is_any() -> None:
     """Symbols annotated with a type alias that resolves to Any should be ANY."""
     types = _public_symbol_types(_PROJECT)
