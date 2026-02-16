@@ -14,7 +14,6 @@ from typestats.index import (
 
 _FIXTURES: Path = Path(__file__).parent / "fixtures"
 _PROJECT: Path = _FIXTURES / "project"
-_NOALIAS_PROJECT: Path = _FIXTURES / "noalias_project"
 
 
 @pytest.mark.parametrize(
@@ -454,7 +453,7 @@ def test_collect_public_symbols_object_var_not_any() -> None:
 
 def test_collect_public_symbols_object_param_no_aliases() -> None:
     """object-as-ANY unfolding works without any type aliases."""
-    types = _public_symbol_types(_NOALIAS_PROJECT)
+    types = _public_symbol_types(_PROJECT)
 
     assert "noalias.funcs.object_param_func" in types
     func = types["noalias.funcs.object_param_func"]
@@ -469,8 +468,8 @@ def test_collect_public_symbols_object_param_no_aliases() -> None:
 
 
 def test_collect_public_symbols_object_return_no_aliases() -> None:
-    """object in return position must NOT be treated as ANY, even without aliases."""
-    types = _public_symbol_types(_NOALIAS_PROJECT)
+    """object in return position must NOT be treated as ANY."""
+    types = _public_symbol_types(_PROJECT)
 
     assert "noalias.funcs.object_return_func" in types
     func = types["noalias.funcs.object_return_func"]
