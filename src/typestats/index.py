@@ -361,12 +361,13 @@ async def collect_public_symbols(  # noqa: C901, PLR0912, PLR0914, PLR0915
         module_data[mod] = entries
         module_locals[mod] = local
 
-    # Step 1.5: Resolve type aliases that point to `Any`
+    # Step 1.5: Normalize Any-equivalent annotations
     #
     # Build a table mapping type-alias FQNs to the FQN of their RHS
     # value, then walk every entry in ``all_local`` and replace any
     # ``Expr`` annotation that resolves to ``typing.Any`` (directly or
-    # through alias chains) with ``ANY``.
+    # through alias chains) with ``ANY``.  Also treats ``object`` in
+    # input (parameter) positions as ``ANY``.
     alias_targets: dict[str, str] = {}
     path_to_mod: dict[anyio.Path, str] = {}
     import_maps: dict[str, dict[str, str]] = {}
