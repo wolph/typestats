@@ -5,9 +5,9 @@ __all__ = ("retry_client",)
 
 
 def retry_client() -> httpx.AsyncClient:
-    """Create an ``httpx.AsyncClient`` with automatic retries for transient errors.
+    """Create an `httpx.AsyncClient` with automatic retries for transient errors.
 
-    Uses ``httpx-retries`` default retry policy with HTTP/2 enabled on the
+    Uses `httpx-retries` default retry policy with HTTP/2 enabled on the
     underlying transport.
     """
     return httpx.AsyncClient(

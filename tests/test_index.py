@@ -422,3 +422,59 @@ def test_collect_public_symbols_function_any_params_unfolded() -> None:
     assert overload.params[1].annotation is not analyze.ANY
     # return `str` should remain annotated
     assert overload.returns is not analyze.ANY
+
+
+def test_collect_public_symbols_object_param_is_any() -> None:
+    """Function params annotated with `object` should be ANY in input position."""
+    types = _public_symbol_types(_PROJECT)
+
+    assert "anypkg.mod.object_param_func" in types
+    func = types["anypkg.mod.object_param_func"]
+    assert isinstance(func, analyze.Function)
+
+    overload = func.overloads[0]
+    # param `x: object` should be ANY (object in input position)
+    assert overload.params[0].name == "x"
+    assert overload.params[0].annotation is analyze.ANY
+    # param `y: int` should remain annotated
+    assert overload.params[1].name == "y"
+    assert overload.params[1].annotation is not analyze.ANY
+    # return `-> object` should NOT be ANY (output position)
+    assert overload.returns is not analyze.ANY
+
+
+def test_collect_public_symbols_object_var_not_any() -> None:
+    """Variable annotated with `object` should NOT be treated as ANY."""
+    types = _public_symbol_types(_PROJECT)
+
+    assert "anypkg.mod.object_var" in types
+    assert types["anypkg.mod.object_var"] is not analyze.ANY
+
+
+def test_collect_public_symbols_object_param_no_aliases() -> None:
+    """object-as-ANY unfolding works without any type aliases."""
+    types = _public_symbol_types(_PROJECT)
+
+    assert "noalias.funcs.object_param_func" in types
+    func = types["noalias.funcs.object_param_func"]
+    assert isinstance(func, analyze.Function)
+
+    overload = func.overloads[0]
+    # param `x: object` should be ANY (input position, no alias_targets needed)
+    assert overload.params[0].name == "x"
+    assert overload.params[0].annotation is analyze.ANY
+    # return `-> int` should remain annotated
+    assert overload.returns is not analyze.ANY
+
+
+def test_collect_public_symbols_object_return_no_aliases() -> None:
+    """object in return position must NOT be treated as ANY."""
+    types = _public_symbol_types(_PROJECT)
+
+    assert "noalias.funcs.object_return_func" in types
+    func = types["noalias.funcs.object_return_func"]
+    assert isinstance(func, analyze.Function)
+
+    overload = func.overloads[0]
+    # return `-> object` should NOT be ANY (output position)
+    assert overload.returns is not analyze.ANY

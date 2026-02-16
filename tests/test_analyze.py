@@ -284,7 +284,7 @@ class TestStringAnnotations:
         assert isinstance(module.symbols[0].type_, Expr)
 
     def test_subscript_annotation(self) -> None:
-        """Stringified subscript annotation like ``"list[str]"`` should be parsed."""
+        """Stringified subscript annotation like `"list[str]"` should be parsed."""
         src = textwrap.dedent("""
         x: "list[str]" = []
         """)

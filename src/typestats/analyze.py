@@ -94,17 +94,17 @@ type _NameResolver = Callable[[cst.CSTNode], str | None]
 def is_annotated(type_: TypeForm, /) -> bool:
     """Check if a type form represents a meaningfully annotated symbol.
 
-    Returns ``True`` for ``Expr``, ``ANY``, and for ``Function``/``Class``
-    types that are annotated (see below).  Returns ``False`` for ``UNKNOWN``,
-    ``KNOWN``, ``EXTERNAL``, and unannotated ``Function``/``Class`` types.
+    Returns `True` for `Expr`, `ANY`, and for `Function`/`Class`
+    types that are annotated (see below).  Returns `False` for `UNKNOWN`,
+    `KNOWN`, `EXTERNAL`, and unannotated `Function`/`Class` types.
     Note: *self*/*cls* parameters are excluded during parsing.
 
-    For ``Function`` types, the function is annotated when at least one
+    For `Function` types, the function is annotated when at least one
     overload has an annotated return type or parameter.
 
-    For ``Class`` types, the class is only considered annotated when **all**
-    of its members (stored in ``Class.members``) are also annotated.
-    Members marked ``KNOWN`` (e.g. dataclass fields, enum values) are
+    For `Class` types, the class is only considered annotated when **all**
+    of its members (stored in `Class.members`) are also annotated.
+    Members marked `KNOWN` (e.g. dataclass fields, enum values) are
     considered annotated.  A class with no members is considered annotated.
     """
     match type_:
@@ -171,7 +171,7 @@ class Overload:
 
     @property
     def annotation_counts(self) -> tuple[int, int]:
-        """``(annotated, annotatable)`` counts for params + return."""
+        """`(annotated, annotatable)` counts for params + return."""
         annotated = sum(1 for p in self.params if p.is_annotated)
         if is_annotated(self.returns):
             annotated += 1
@@ -206,7 +206,7 @@ class Function:
 
     @property
     def annotation_counts(self) -> tuple[int, int]:
-        """``(annotated, annotatable)`` counts across all overloads."""
+        """`(annotated, annotatable)` counts across all overloads."""
         counts = [o.annotation_counts for o in self.overloads]
         return sum(a for a, _ in counts), sum(t for _, t in counts)
 
@@ -222,7 +222,7 @@ class Class:
 
     @property
     def annotation_counts(self) -> tuple[int, int]:
-        """``(annotated, annotatable)`` counts across all members."""
+        """`(annotated, annotatable)` counts across all members."""
         counts = [annotation_counts(m) for m in self.members]
         return sum(a for a, _ in counts), sum(t for _, t in counts)
 
@@ -232,7 +232,7 @@ class Class:
 
 
 def annotation_counts(type_: TypeForm, /) -> tuple[int, int]:
-    """``(annotated, annotatable)`` counts for an arbitrary type form."""
+    """`(annotated, annotatable)` counts for an arbitrary type form."""
     match type_:
         case Function() | Class():
             return type_.annotation_counts
@@ -305,7 +305,7 @@ def _extract_names(expr: cst.BaseExpression) -> list[cst.Name]:
 
 
 def _parse_string_annotation(expr: cst.BaseExpression) -> cst.BaseExpression:
-    """Parse a stringified annotation like ``"list[str]"`` into a CST expression.
+    """Parse a stringified annotation like `"list[str]"` into a CST expression.
 
     If *expr* is a `SimpleString` or `ConcatenatedString` whose evaluated value
     is valid Python, the parsed expression is returned.  Otherwise the original

@@ -14,3 +14,10 @@ string_int_var: "int" = 1
 
 def annotated_func(a: Unknown, b: int) -> str:
     return str(a)
+
+
+object_var: object = None
+
+
+def object_param_func(x: object, y: int) -> object:
+    return x
