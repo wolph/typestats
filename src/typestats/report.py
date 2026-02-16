@@ -1,21 +1,17 @@
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, NamedTuple, Protocol, Self
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, Protocol, Self
+
+if TYPE_CHECKING:
+    from _typeshed import StrPath
 
 import anyio
 import mainpy
 
 from typestats import analyze
 
-__all__ = (
-    "ClassReport",
-    "FunctionReport",
-    "ModuleReport",
-    "NameReport",
-    "PackageReport",
-    "SymbolReport",
-)
+__all__ = "ClassReport", "FunctionReport", "ModuleReport", "NameReport", "PackageReport"
 
 type _Symbols = Sequence[analyze.Symbol]
 type _Max1 = Literal[0, 1]
@@ -40,7 +36,7 @@ class _SlotState(NamedTuple):
                 return cls(0, 0, 0)
 
 
-class SymbolReport[SymbolT: analyze.TypeForm](Protocol):
+class _SymbolReport[SymbolT: analyze.TypeForm = Any](Protocol):
     """Common interface for per-symbol reports."""
 
     @property
@@ -68,7 +64,8 @@ class NameReport:
     n_unannotated: _Max1
 
     @property
-    def n_annotatable(self) -> int:
+    def n_annotatable(self) -> _Max1:
+        # pyrefly: ignore[bad-return]
         return self.n_annotated + self.n_any + self.n_unannotated
 
     @classmethod
@@ -143,7 +140,7 @@ class ClassReport:
         return cls.from_class(name, ty)
 
 
-def _symbol_report(symbol: analyze.Symbol) -> SymbolReport[Any]:
+def _symbol_report(symbol: analyze.Symbol) -> _SymbolReport[Any]:
     """Create the appropriate report for a symbol."""
     match symbol.type_:
         case analyze.Function():
@@ -157,11 +154,11 @@ def _symbol_report(symbol: analyze.Symbol) -> SymbolReport[Any]:
 @dataclass(frozen=True, slots=True)
 class ModuleReport:
     path: anyio.Path
-    symbols: tuple[SymbolReport[Any], ...]
+    symbol_reports: tuple[_SymbolReport, ...]
 
     @property
-    def name_module(self) -> str:
-        """Fully qualified module name derived from the path."""
+    def module(self) -> str:
+        """Fully qualified module name."""
         parts = self.path.with_suffix("").parts
         if parts and parts[-1] == "__init__":
             parts = parts[:-1]
@@ -169,35 +166,38 @@ class ModuleReport:
 
     @property
     def names(self) -> frozenset[str]:
-        return frozenset(s.name for s in self.symbols)
+        return frozenset(s.name for s in self.symbol_reports)
 
     @property
     def n_annotatable(self) -> int:
-        return sum(s.n_annotatable for s in self.symbols)
+        return sum(s.n_annotatable for s in self.symbol_reports)
 
     @property
     def n_annotated(self) -> int:
-        return sum(s.n_annotated for s in self.symbols)
+        return sum(s.n_annotated for s in self.symbol_reports)
 
     @property
     def n_any(self) -> int:
-        return sum(s.n_any for s in self.symbols)
+        return sum(s.n_any for s in self.symbol_reports)
 
     @property
     def n_unannotated(self) -> int:
-        return sum(s.n_unannotated for s in self.symbols)
+        return sum(s.n_unannotated for s in self.symbol_reports)
 
     def coverage(self, strict: bool = False, /) -> float:
-        """Coverage ratio. If *strict*, `Any` slots don't count."""
+        """
+        Coverage ratio.
+
+        Args:
+            strict (bool): If `True`, `Any` types won't be counted as annotated.
+        """
         total = self.n_annotatable
         annotated = self.n_annotated if strict else self.n_annotated + self.n_any
         return annotated / total if total else 0.0
 
     @classmethod
-    def from_symbols(cls, path: str | anyio.Path, symbols: _Symbols) -> Self:
-        """Compute stats for a single source file."""
-        reports = tuple(_symbol_report(s) for s in symbols)
-        return cls(anyio.Path(path), reports)
+    def from_symbols(cls, path: StrPath, symbols: _Symbols) -> Self:
+        return cls(anyio.Path(path), tuple(_symbol_report(s) for s in symbols))
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,16 +247,16 @@ class PackageReport:
     @classmethod
     def from_symbols(
         cls,
-        package: str,
-        base_path: str | anyio.Path,
-        public_symbols: Mapping[anyio.Path, _Symbols],
+        pkg: str,
+        path: StrPath,
+        symbols: Mapping[anyio.Path, _Symbols],
     ) -> Self:
         """Build a `PackageReport` from collected public symbols."""
         files = tuple(
-            ModuleReport.from_symbols(source_path.relative_to(base_path), symbols)
-            for source_path, symbols in public_symbols.items()
+            ModuleReport.from_symbols(src_path.relative_to(path), symbols)
+            for src_path, symbols in symbols.items()
         )
-        return cls(package, files)
+        return cls(pkg, files)
 
 
 @mainpy.main
