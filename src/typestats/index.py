@@ -2,12 +2,12 @@ import enum
 import logging
 import os
 import re
+import time
 from collections import defaultdict, deque
 from itertools import chain
 from typing import TYPE_CHECKING, Final
 
 import anyio
-import mainpy
 from libcst.helpers import get_full_name_for_node
 
 from typestats import _ruff, analyze
@@ -305,6 +305,7 @@ async def collect_public_symbols(  # noqa: C901, PLR0912, PLR0914, PLR0915
     re-exports a symbol from a private module, the origin's fully qualified name
     (and source path) is used rather than the re-exporting module's.
     """
+    t0 = time.perf_counter()
     sources = list(await list_sources(project_dir))
 
     # Drop .py when .pyi exists for the same file
@@ -475,51 +476,9 @@ async def collect_public_symbols(  # noqa: C901, PLR0912, PLR0914, PLR0915
                 public.setdefault(f"{mod}.{name}", (first_path, type_))
 
     result: defaultdict[anyio.Path, list[analyze.Symbol]] = defaultdict(list)
-    for fqn, (path, type_) in sorted(public.items()):
+    for fqn, (path, type_) in public.items():
         result[path].append(analyze.Symbol(fqn, type_))
+
+    elapsed = time.perf_counter() - t0
+    _logger.info("collect_public_symbols: %.2fs", elapsed)
     return result
-
-
-@mainpy.main
-async def example() -> None:
-    import sys  # noqa: PLC0415
-    import time  # noqa: PLC0415
-
-    from typestats import _pypi  # noqa: PLC0415
-    from typestats._http import retry_client  # noqa: PLC0415
-
-    package = sys.argv[1] if len(sys.argv) > 1 else "optype"
-
-    t0 = time.monotonic()
-    async with anyio.TemporaryDirectory() as temp_dir:
-        async with retry_client() as client:
-            path, _ = await _pypi.download_sdist_latest(client, package, temp_dir)
-
-        total_annotated = 0
-        total_annotatable = 0
-        public_symbols = await collect_public_symbols(path)
-        for source_path, symbols in sorted(public_symbols.items()):
-            rel_path = source_path.relative_to(path)
-            file_annotated = 0
-            file_annotatable = 0
-            names_unannotated: list[str] = []
-            for s in symbols:
-                a, t = analyze.annotation_counts(s.type_)
-                file_annotated += a
-                file_annotatable += t
-                if a < t:
-                    names_unannotated.append(s.name)
-            total_annotated += file_annotated
-            total_annotatable += file_annotatable
-            print(  # noqa: T201
-                f"{rel_path} -> {file_annotated}/{file_annotatable} annotated"
-                f" ({', '.join(sorted(names_unannotated))})",
-            )
-
-        pct = total_annotated / total_annotatable * 100 if total_annotatable else 0
-        print(  # noqa: T201
-            f"\nTotal: {total_annotated}/{total_annotatable} annotated ({pct:.1f}%)",
-        )
-
-    elapsed = time.monotonic() - t0
-    _logger.info("Total runtime: %.2fs", elapsed)

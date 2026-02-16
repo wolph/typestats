@@ -30,11 +30,11 @@ For a given project:
 9. Resolve public symbols via origin-tracing (follow re-export chains to their defining module)
 10. Collect the type-checker configs to see which strictness flags are used and which
     type-checkers it supports (mypy, (based)pyright, pyrefly, ty, zuban)
-11. TODO: Compute various statistics:
+11. Compute various statistics:
     - coverage (% of public symbols annotated)
     - strict coverage (% of public symbols annotated without `Any`)
-    - average overload ratio (function without overloads counts as 1 overload)
-    - supported type-checkers + strictness flags
+    - TODO: average overload ratio (function without overloads counts as 1 overload)
+    - TODO: supported type-checkers + strictness flags
       annotation kind (inline, bundled stubs, typeshed stubs, third-party stubs, etc)
 12. TODO: Export the statistics for use in a website/dashboard (e.g. json, csv, or sqlite)
 
@@ -67,10 +67,11 @@ Per-module (via `libcst`):
 - **`Annotated` unwrapping**: `Annotated[T, ...]` → `T`
   ([spec](https://typing.python.org/en/latest/spec/qualifiers.html#annotated))
 - **Aliased typing imports**: `import typing as t` resolved via `QualifiedNameProvider`
-- **`Any` detection**: annotations that resolve to `typing.Any`—whether used directly, through
-  local type aliases (`type Unknown = Any`), or cross-module alias chains—are marked `ANY` and
-  tracked separately, but still count as annotated for coverage purposes. The `_typeshed` aliases
-  `Incomplete`, `MaybeNone`, `sentinel`, and `AnnotationForm` are also treated as `Any`.
+- **`Any` detection**: annotations that resolve to `typing.Any` (or `typing_extensions.Any`,
+  `_typeshed.Incomplete`, `_typeshed.MaybeNone`, `_typeshed.sentinel`,
+  `_typeshed.AnnotationForm`)—whether used directly, through local type aliases
+  (`type Unknown = Any`), or cross-module alias chains—are marked `ANY` and tracked separately,
+  but still count as annotated for coverage purposes
 
 Cross-module (via import graph):
 

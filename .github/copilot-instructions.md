@@ -36,6 +36,7 @@ For a given PyPI project the tool runs an end-to-end pipeline:
 | `_typeshed.py`    | Typeshed-related helpers                                                          |
 | `analyze.py`      | `libcst`-based per-file symbol extraction (annotations, overloads, classes, etc.) |
 | `index.py`        | Cross-module import resolution, public API construction, origin-based attribution |
+| `report.py`       | Slot-level coverage reporting (`SymbolReport` protocol, module/package reports)   |
 | `typecheckers.py` | Detection of type-checker configs and strictness flags                            |
 
 ## Conventions
