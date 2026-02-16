@@ -6,9 +6,7 @@ from typing import Any, Literal, NamedTuple, Protocol, Self
 import anyio
 import mainpy
 
-from typestats import _pypi, analyze
-from typestats._http import retry_client
-from typestats.index import collect_public_symbols
+from typestats import analyze
 
 __all__ = (
     "ClassReport",
@@ -229,19 +227,18 @@ class PackageReport:
         annotated = self.n_annotated if strict else self.n_annotated + self.n_any
         return annotated / total if total else 0.0
 
-    # ruff: noqa: T201
     def print(self) -> None:
         """Print a human-readable summary to stdout."""
         for f in self.module_reports:
             typed = f.n_annotated + f.n_any
-            print(
+            print(  # noqa: T201
                 f"{f.path} -> {f.coverage():.1%} "
                 f"({typed}/{f.n_annotatable} annotated, "
                 f"{f.n_any} Any, {f.n_unannotated} missing)",
             )
 
         typed = self.n_annotated + self.n_any
-        print(
+        print(  # noqa: T201
             f"=> Total: {self.coverage():.1%} "
             f"({typed}/{self.n_annotatable} annotated, "
             f"{self.n_any} Any, {self.n_unannotated} missing)",
@@ -267,6 +264,10 @@ class PackageReport:
 
 @mainpy.main
 async def main() -> None:
+    from typestats import _pypi  # noqa: PLC0415
+    from typestats._http import retry_client  # noqa: PLC0415
+    from typestats.index import collect_public_symbols  # noqa: PLC0415
+
     package = sys.argv[1] if len(sys.argv) > 1 else "optype"
 
     async with anyio.TemporaryDirectory() as temp_dir:
