@@ -272,6 +272,83 @@ class TestAnnotatedUnwrap:
         assert str(module.type_aliases[0].value) == "str"
 
 
+class TestStringAnnotations:
+    def test_variable_annotation(self) -> None:
+        """Stringified variable annotation should be parsed into a proper Expr."""
+        src = textwrap.dedent("""
+        x: "int" = 1
+        """)
+        module = collect_symbols(src)
+        assert module.symbols[0].name == "x"
+        assert str(module.symbols[0].type_) == "int"
+        assert isinstance(module.symbols[0].type_, Expr)
+
+    def test_subscript_annotation(self) -> None:
+        """Stringified subscript annotation like ``"list[str]"`` should be parsed."""
+        src = textwrap.dedent("""
+        x: "list[str]" = []
+        """)
+        module = collect_symbols(src)
+        assert module.symbols[0].name == "x"
+        assert str(module.symbols[0].type_) == "list[str]"
+
+    def test_function_param(self) -> None:
+        """Stringified param annotations should be parsed."""
+        src = textwrap.dedent("""
+        def f(x: "int", y: "list[str]") -> None:
+            pass
+        """)
+        module = collect_symbols(src)
+        func = module.symbols[0].type_
+        assert isinstance(func, Function)
+        overload = func.overloads[0]
+        assert str(overload.params[0].annotation) == "int"
+        assert str(overload.params[1].annotation) == "list[str]"
+
+    def test_function_return(self) -> None:
+        """Stringified return annotations should be parsed."""
+        src = textwrap.dedent("""
+        def f() -> "int":
+            pass
+        """)
+        module = collect_symbols(src)
+        func = module.symbols[0].type_
+        assert isinstance(func, Function)
+        assert str(func.overloads[0].returns) == "int"
+
+    def test_annotated_unwrap(self) -> None:
+        """Annotated[] inside a string annotation should be unwrapped."""
+        src = textwrap.dedent("""
+        from typing import Annotated
+
+        x: "Annotated[int, 'meta']" = 1
+        """)
+        module = collect_symbols(src)
+        assert str(module.symbols[0].type_) == "int"
+
+    def test_forward_reference(self) -> None:
+        """Forward reference to a class defined later."""
+        src = textwrap.dedent("""
+        x: "MyClass"
+
+        class MyClass:
+            pass
+        """)
+        module = collect_symbols(src)
+        assert str(module.symbols[0].type_) == "MyClass"
+        assert isinstance(module.symbols[0].type_, Expr)
+
+    def test_invalid_string_not_parsed(self) -> None:
+        """A string that isn't valid Python should still count as annotated."""
+        src = textwrap.dedent("""
+        x: "not valid python !!!" = 1
+        """)
+        module = collect_symbols(src)
+        assert module.symbols[0].name == "x"
+        # Falls back to the original SimpleString — still an Expr (annotated)
+        assert isinstance(module.symbols[0].type_, Expr)
+
+
 class TestKnownAttrs:
     def test_enum_members(self) -> None:
         src = textwrap.dedent("""
