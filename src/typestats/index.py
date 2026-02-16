@@ -369,12 +369,12 @@ async def collect_public_symbols(  # noqa: C901, PLR0912, PLR0914, PLR0915
     # through alias chains) with ``ANY``.
     alias_targets: dict[str, str] = {}
     path_to_mod: dict[anyio.Path, str] = {}
-    module_import_maps: dict[str, dict[str, str]] = {}
+    import_maps: dict[str, dict[str, str]] = {}
     for mod, entries in module_data.items():
         imap: dict[str, str] = {}
         for syms in entries.values():
             imap.update(syms.imports)
-        module_import_maps[mod] = imap
+        import_maps[mod] = imap
 
         for path in entries:
             path_to_mod[path] = mod
@@ -389,19 +389,13 @@ async def collect_public_symbols(  # noqa: C901, PLR0912, PLR0914, PLR0915
                     alias_fqn = f"{mod}.{alias.name}"
                     alias_targets[alias_fqn] = _resolve_expr_name(value_name, imap, mod)
 
-    if alias_targets:
-        for fqn, (path, type_) in list(all_local.items()):
-            if (p2m := path_to_mod.get(path)) is None:
-                continue
+    for fqn, (path, type_) in list(all_local.items()):
+        if (p2m := path_to_mod.get(path)) is None:
+            continue
 
-            new_type = _unfold_any(
-                type_,
-                module_import_maps.get(p2m, {}),
-                p2m,
-                alias_targets,
-            )
-            if new_type is not type_:
-                all_local[fqn] = (path, new_type)
+        type_new = _unfold_any(type_, import_maps.get(p2m, {}), p2m, alias_targets)
+        if type_new is not type_:
+            all_local[fqn] = path, type_new
 
     # Step 2: Compute module exports with origin tracing
     exports_cache: dict[str, dict[str, str]] = {}

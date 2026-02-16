@@ -14,6 +14,7 @@ from typestats.index import (
 
 _FIXTURES: Path = Path(__file__).parent / "fixtures"
 _PROJECT: Path = _FIXTURES / "project"
+_NOALIAS_PROJECT: Path = _FIXTURES / "noalias_project"
 
 
 @pytest.mark.parametrize(
@@ -449,3 +450,32 @@ def test_collect_public_symbols_object_var_not_any() -> None:
 
     assert "anypkg.mod.object_var" in types
     assert types["anypkg.mod.object_var"] is not analyze.ANY
+
+
+def test_collect_public_symbols_object_param_no_aliases() -> None:
+    """object-as-ANY unfolding works without any type aliases."""
+    types = _public_symbol_types(_NOALIAS_PROJECT)
+
+    assert "noalias.funcs.object_param_func" in types
+    func = types["noalias.funcs.object_param_func"]
+    assert isinstance(func, analyze.Function)
+
+    overload = func.overloads[0]
+    # param `x: object` should be ANY (input position, no alias_targets needed)
+    assert overload.params[0].name == "x"
+    assert overload.params[0].annotation is analyze.ANY
+    # return `-> int` should remain annotated
+    assert overload.returns is not analyze.ANY
+
+
+def test_collect_public_symbols_object_return_no_aliases() -> None:
+    """object in return position must NOT be treated as ANY, even without aliases."""
+    types = _public_symbol_types(_NOALIAS_PROJECT)
+
+    assert "noalias.funcs.object_return_func" in types
+    func = types["noalias.funcs.object_return_func"]
+    assert isinstance(func, analyze.Function)
+
+    overload = func.overloads[0]
+    # return `-> object` should NOT be ANY (output position)
+    assert overload.returns is not analyze.ANY
