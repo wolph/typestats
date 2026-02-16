@@ -9,12 +9,7 @@ import mainpy
 from libcst.codemod import CodemodContext
 from libcst.codemod.visitors import GatherExportsVisitor, GatherImportsVisitor
 from libcst.helpers import get_full_name_for_node
-from libcst.metadata import (
-    MetadataWrapper,
-    QualifiedName,
-    QualifiedNameProvider,
-    QualifiedNameSource,
-)
+from libcst.metadata import MetadataWrapper
 
 if TYPE_CHECKING:
     import types
@@ -368,56 +363,48 @@ class _ClassStackItem:
 
 
 class _SymbolVisitor(cst.BatchableCSTVisitor):
-    METADATA_DEPENDENCIES = (QualifiedNameProvider,)
-
     module: Final[cst.Module]
     symbols: Final[list[Symbol]]
     type_aliases: Final[list[TypeAlias]]
     import_aliases: Final[list[tuple[str, str]]]
 
+    _imports: Final[dict[str, str]]
+    _defined_names: Final[set[str]]
     _class_stack: Final[deque[_ClassStackItem]]
     _function_depth: int
     _overload_map: defaultdict[str, list[Overload]]
     _added_functions: set[str]
 
-    def __init__(self, module: cst.Module, /) -> None:
+    def __init__(self, module: cst.Module, imports: Mapping[str, str], /) -> None:
         self.module = module
         self.symbols = []
         self.type_aliases = []
         self.import_aliases = []
+        self._imports = dict(imports)
+        self._defined_names = set()
         self._class_stack = deque()
         self._function_depth = 0
         self._overload_map = defaultdict(list)
         self._added_functions = set()
 
-    def _get_qualified_names(self, node: cst.CSTNode) -> Collection[QualifiedName]:
-        return self.get_metadata(QualifiedNameProvider, node, default=set())
-
-    def _qualified_name(self, node: cst.CSTNode) -> str | None:
-        if not (names := self._get_qualified_names(node)):
+    def _resolve_name(self, node: cst.CSTNode) -> str | None:
+        """Resolve a CST node to its fully qualified name using the import map."""
+        if (raw := get_full_name_for_node(node)) is None:
             return None
 
-        for qn in names:
-            if qn.source is not QualifiedNameSource.LOCAL:
-                return qn.name
-
-        return next(iter(names)).name
-
-    def _full_name(self, node: cst.CSTNode) -> str | None:
-        return self._qualified_name(node) or get_full_name_for_node(node)
+        first, _, rest = raw.partition(".")
+        if fqn := self._imports.get(first):
+            return f"{fqn}.{rest}" if rest else fqn
+        return raw
 
     def _symbol_name(self, node: cst.Name) -> str:
-        if qualified := self._qualified_name(node):
-            name = qualified.split(".", 1)[-1]
-        else:
-            name = node.value
-
-        if self._class_stack and not self._function_depth and "." not in name:
-            name = f"{self._class_stack[-1].name}.{name}"
+        name = node.value
+        if (stack := self._class_stack) and not self._function_depth:
+            name = f"{stack[-1].name}.{name}"
         return name
 
     def _is_name_in(self, node: cst.CSTNode, haystack: Collection[str]) -> bool:
-        full_name = self._full_name(node)
+        full_name = self._resolve_name(node)
         return full_name is not None and _leaf_name(full_name) in haystack
 
     def _is_enum_class(self, node: cst.ClassDef) -> bool:
@@ -432,19 +419,17 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
             if self._is_name_in(expr, _DATACLASS_DECORATORS):
                 return True
 
-        return any(
-            self._is_name_in(base.value, _KNOWN_ATTRS_BASES) for base in node.bases
-        )
+        return any(self._is_name_in(b.value, _KNOWN_ATTRS_BASES) for b in node.bases)
 
     def _is_typealias_annotation(self, annotation: cst.Annotation) -> bool:
-        full_name = self._full_name(annotation.annotation)
+        full_name = self._resolve_name(annotation.annotation)
         return full_name is not None and _leaf_name(full_name) == "TypeAlias"
 
     def _is_special_typeform(self, expr: cst.BaseExpression) -> bool:
-        if not isinstance(expr, cst.Call):
-            return False
-
-        return self._is_name_in(expr.func, _SPECIAL_TYPEFORMS)
+        return (
+            isinstance(expr, cst.Call)
+            and self._is_name_in(expr.func, _SPECIAL_TYPEFORMS)
+        )  # fmt: skip
 
     def _typealias_value_from_call(
         self,
@@ -453,7 +438,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         if not isinstance(expr, cst.Call):
             return None
 
-        full_name = self._full_name(expr.func)
+        full_name = self._resolve_name(expr.func)
         if full_name is None or _leaf_name(full_name) != "TypeAliasType":
             return None
 
@@ -468,10 +453,12 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         return None
 
     def _add_type_alias(self, name_node: cst.Name, value: cst.BaseExpression) -> None:
+        if not self._class_stack:
+            self._defined_names.add(name_node.value)
         self.type_aliases.append(
             TypeAlias(
                 self._symbol_name(name_node),
-                Expr.from_expr(value, self._qualified_name),
+                Expr.from_expr(value, self._resolve_name),
             ),
         )
 
@@ -479,10 +466,12 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         return Param(
             param.name.value,
             kind,
-            Expr.from_annotation(param.annotation, self._qualified_name),
+            Expr.from_annotation(param.annotation, self._resolve_name),
         )
 
     def _add_symbol(self, name_node: cst.Name, annotation: TypeForm) -> None:
+        if not self._class_stack:
+            self._defined_names.add(name_node.value)
         self.symbols.append(Symbol(self._symbol_name(name_node), annotation))
         if self._class_stack and not self._function_depth:
             self._class_stack[-1].members.append(annotation)
@@ -519,7 +508,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
 
         return Overload(
             tuple(params),
-            Expr.from_annotation(node.returns, self._qualified_name),
+            Expr.from_annotation(node.returns, self._resolve_name),
         )
 
     @override
@@ -528,6 +517,8 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
             return False
 
         name = node.name.value
+        if not self._class_stack:
+            self._defined_names.add(name)
         symbol_index = len(self.symbols)
         self.symbols.append(Symbol(name, Class(name)))
         self._class_stack.append(
@@ -554,6 +545,8 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
     @override
     def visit_FunctionDef(self, node: cst.FunctionDef) -> bool:
         if self._function_depth == 0:
+            if not self._class_stack:
+                self._defined_names.add(node.name.value)
             decorators = {
                 _leaf_name(full)
                 for dec in node.decorators
@@ -570,7 +563,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
             elif "property" in decorators or "cached_property" in decorators:
                 self._add_symbol(
                     node.name,
-                    Expr.from_annotation(node.returns, self._qualified_name),
+                    Expr.from_annotation(node.returns, self._resolve_name),
                 )
             else:
                 if overload_list := self._overload_map.pop(name, None):
@@ -621,7 +614,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         if self._class_stack and self._class_stack[-1].is_known_attrs:
             ty = KNOWN
         else:
-            ty = Expr.from_expr(node.annotation.annotation, self._qualified_name)
+            ty = Expr.from_expr(node.annotation.annotation, self._resolve_name)
 
         for name_node in _extract_names(node.target):
             self._add_symbol(name_node, ty)
@@ -669,29 +662,26 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         if not isinstance(base, (cst.Name, cst.Attribute)):
             return False
 
-        if not (names := self._get_qualified_names(base)):
-            # no qualified names; not an alias
+        raw = get_full_name_for_node(base)
+        if raw is None:
             return False
 
-        imported = next(
-            (qn for qn in names if qn.source is QualifiedNameSource.IMPORT),
-            None,
-        )
-        if imported is not None:
+        first = raw.split(".", 1)[0]
+
+        if first in self._imports:
+            resolved = self._imports[first]
+            _, _, rest = raw.partition(".")
+            fqn = f"{resolved}.{rest}" if rest else resolved
             for target in node.targets:
                 for name_node in _extract_names(target.target):
                     if is_subscript:
                         # `X = ImportedType[args]` is a type alias, not a re-export
                         self._add_type_alias(name_node, value)
                     else:
-                        self.import_aliases.append((name_node.value, imported.name))
+                        self.import_aliases.append((name_node.value, fqn))
             return True
 
-        local = next(
-            (qn for qn in names if qn.source is QualifiedNameSource.LOCAL),
-            None,
-        )
-        if local is not None:
+        if first in self._defined_names:
             for target in node.targets:
                 for name_node in _extract_names(target.target):
                     self._add_type_alias(name_node, value)
@@ -844,41 +834,44 @@ def collect_symbols(
     package_name: str | None = None,
 ) -> ModuleSymbols:
     module = cst.parse_module(source)
-    wrapper = MetadataWrapper(module)
-    symbol_visitor = _SymbolVisitor(wrapper.module)
+    wrapper = MetadataWrapper(module, unsafe_skip_copy=True)
+
+    # Phase 1: Collect imports, exports, and type-ignore comments.
+    # None of these visitors require metadata providers, so no expensive
+    # scope analysis is triggered.
     exports_visitor = _ExportsVisitor(CodemodContext())
     imports_visitor = _ImportsVisitor(
         CodemodContext(full_package_name=package_name or ""),
     )
     type_ignore_visitor = _TypeIgnoreVisitor()
-    wrapper.visit_batched([
-        symbol_visitor,
-        exports_visitor,
-        imports_visitor,
-        type_ignore_visitor,
-    ])
+    wrapper.visit_batched([exports_visitor, imports_visitor, type_ignore_visitor])
 
-    imports = (
-        dict(symbol_visitor.import_aliases)
-        | {module: module for module in imports_visitor.module_imports}
-        | {alias: module for module, alias in imports_visitor.module_aliases.items()}
+    # Build an import map for lightweight name resolution (replaces
+    # the expensive QualifiedNameProvider / ScopeProvider pipeline).
+    imports_map: dict[str, str] = (
+        {mod: mod for mod in imports_visitor.module_imports}
+        | {alias: mod for mod, alias in imports_visitor.module_aliases.items()}
         | {
-            obj: f"{module}.{obj}"
-            for module, objects in imports_visitor.object_mapping.items()
+            obj: f"{mod}.{obj}"
+            for mod, objects in imports_visitor.object_mapping.items()
             for obj in objects
             if obj != "*"
         }
         | {
-            alias: f"{module}.{obj}"
-            for module, aliases in imports_visitor.alias_mapping.items()
+            alias: f"{mod}.{obj}"
+            for mod, aliases in imports_visitor.alias_mapping.items()
             for obj, alias in aliases
         }
     )
 
+    # Phase 2: Collect symbols using the import map for name resolution.
+    symbol_visitor = _SymbolVisitor(wrapper.module, imports_map)
+    wrapper.visit_batched([symbol_visitor])
+
+    imports = dict(symbol_visitor.import_aliases) | imports_map
+
     wildcard_modules = tuple(
-        module
-        for module, objects in imports_visitor.object_mapping.items()
-        if "*" in objects
+        mod for mod, objects in imports_visitor.object_mapping.items() if "*" in objects
     )
 
     reexports = frozenset(
@@ -887,9 +880,7 @@ def collect_symbols(
         for name, alias in aliases
         if name == alias
     ) | frozenset(
-        module
-        for module, alias in imports_visitor.module_aliases.items()
-        if module == alias
+        mod for mod, alias in imports_visitor.module_aliases.items() if mod == alias
     )
 
     return ModuleSymbols(
