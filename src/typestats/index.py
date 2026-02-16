@@ -42,7 +42,14 @@ _EXCLUDED_FILE_NAMES: Final[frozenset[str]] = frozenset({"conftest.py"})
 # Module-level dunder names that are not real symbols for typing purposes.
 _MODULE_DUNDERS: Final[frozenset[str]] = frozenset({"__all__", "__doc__"})
 # Fully qualified names that are considered equivalent to having no annotation.
-_ANY_FQNS: Final[frozenset[str]] = frozenset({"typing.Any", "typing_extensions.Any"})
+_ANY_FQNS: Final[frozenset[str]] = frozenset({
+    "typing.Any",
+    "typing_extensions.Any",
+    "_typeshed.Incomplete",
+    "_typeshed.MaybeNone",
+    "_typeshed.sentinel",
+    "_typeshed.AnnotationForm",
+})
 
 
 def _is_public(name: str) -> bool:

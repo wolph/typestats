@@ -325,6 +325,22 @@ class TestResolvesToAny:
         }
         assert not _resolves_to_any("mod.MyInt", aliases)
 
+    def test_typeshed_incomplete(self) -> None:
+        assert _resolves_to_any("_typeshed.Incomplete", {})
+
+    def test_typeshed_maybe_none(self) -> None:
+        assert _resolves_to_any("_typeshed.MaybeNone", {})
+
+    def test_typeshed_sentinel(self) -> None:
+        assert _resolves_to_any("_typeshed.sentinel", {})
+
+    def test_typeshed_annotation_form(self) -> None:
+        assert _resolves_to_any("_typeshed.AnnotationForm", {})
+
+    def test_alias_to_typeshed_incomplete(self) -> None:
+        aliases = {"mod.X": "_typeshed.Incomplete"}
+        assert _resolves_to_any("mod.X", aliases)
+
 
 def test_collect_public_symbols_direct_any_is_any() -> None:
     """Symbols annotated with `typing.Any` should be ANY."""
