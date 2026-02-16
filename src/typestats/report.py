@@ -1,6 +1,7 @@
 import sys
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, NamedTuple, Protocol, Self
+from typing import Any, Literal, NamedTuple, Protocol, Self
 
 import anyio
 import mainpy
@@ -17,11 +18,6 @@ __all__ = (
     "PackageReport",
     "SymbolReport",
 )
-
-if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
-
-    from _typeshed import StrPath
 
 type _Symbols = Sequence[analyze.Symbol]
 type _Max1 = Literal[0, 1]
@@ -200,7 +196,7 @@ class ModuleReport:
         return annotated / total if total else 0.0
 
     @classmethod
-    def from_symbols(cls, path: StrPath, symbols: _Symbols) -> Self:
+    def from_symbols(cls, path: str | anyio.Path, symbols: _Symbols) -> Self:
         """Compute stats for a single source file."""
         reports = tuple(_symbol_report(s) for s in symbols)
         return cls(anyio.Path(path), reports)
@@ -255,13 +251,16 @@ class PackageReport:
     def from_symbols(
         cls,
         package: str,
-        base_path: StrPath,
+        base_path: str | anyio.Path,
         public_symbols: Mapping[anyio.Path, _Symbols],
     ) -> Self:
         """Build a `PackageReport` from collected public symbols."""
         files = tuple(
             ModuleReport.from_symbols(source_path.relative_to(base_path), symbols)
-            for source_path, symbols in sorted(public_symbols.items())
+            for source_path, symbols in sorted(
+                public_symbols.items(),
+                key=lambda kv: str(kv[0]),
+            )
         )
         return cls(package, files)
 

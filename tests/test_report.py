@@ -1,5 +1,6 @@
 import anyio
 import libcst as cst
+import pytest
 
 from typestats.analyze import (
     ANY,
@@ -199,16 +200,16 @@ class TestModuleReport:
     def test_coverage_default(self) -> None:
         """Non-strict: Any counts as annotated."""
         m = ModuleReport.from_symbols("m.py", [Symbol("a", _INT), Symbol("b", ANY)])
-        assert m.coverage() == 1
+        assert m.coverage() == pytest.approx(1)
 
     def test_coverage_strict(self) -> None:
         """Strict: Any doesn't count as annotated."""
         m = ModuleReport.from_symbols("m.py", [Symbol("a", _INT), Symbol("b", ANY)])
-        assert m.coverage(True) == 1 / 2
+        assert m.coverage(True) == pytest.approx(1 / 2)
 
     def test_coverage_empty(self) -> None:
         m = ModuleReport(anyio.Path("m.py"), ())
-        assert m.coverage() == 0
+        assert m.coverage() == pytest.approx(0)
 
 
 class TestPackageReport:
@@ -218,11 +219,11 @@ class TestPackageReport:
 
     def test_coverage(self) -> None:
         r = self._pkg(Symbol("a", _INT), Symbol("b", ANY))
-        assert r.coverage() == 1
+        assert r.coverage() == pytest.approx(1)
 
     def test_coverage_strict(self) -> None:
         r = self._pkg(Symbol("a", _INT), Symbol("b", ANY))
-        assert r.coverage(True) == 1 / 2
+        assert r.coverage(True) == pytest.approx(1 / 2)
 
     def test_aggregation(self) -> None:
         r = self._pkg(Symbol("a", _INT), Symbol("b", ANY), Symbol("c", UNKNOWN))
