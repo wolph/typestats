@@ -391,6 +391,8 @@ async def collect_public_symbols(  # noqa: C901, PLR0912, PLR0914, PLR0915
                     alias_targets[alias_fqn] = _resolve_expr_name(value_name, imap, mod)
 
     for fqn, (path, type_) in list(all_local.items()):
+        if not isinstance(type_, analyze.Expr | analyze.Function | analyze.Class):
+            continue
         if (p2m := path_to_mod.get(path)) is None:
             continue
 
