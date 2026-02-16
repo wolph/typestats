@@ -157,7 +157,7 @@ class ModuleReport:
     symbol_reports: tuple[_SymbolReport, ...]
 
     @property
-    def module(self) -> str:
+    def name(self) -> str:
         """Fully qualified module name."""
         parts = self.path.with_suffix("").parts
         if parts and parts[-1] == "__init__":

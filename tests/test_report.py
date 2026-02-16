@@ -174,11 +174,11 @@ class TestSymbolReport:
 class TestModuleReport:
     def test_name_module(self) -> None:
         m = ModuleReport(anyio.Path("pkg/sub/mod.py"), ())
-        assert m.name_module == "pkg.sub.mod"
+        assert m.name == "pkg.sub.mod"
 
     def test_name_module_init(self) -> None:
         m = ModuleReport(anyio.Path("pkg/__init__.py"), ())
-        assert m.name_module == "pkg"
+        assert m.name == "pkg"
 
     def test_names(self) -> None:
         m = ModuleReport.from_symbols(
