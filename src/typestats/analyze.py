@@ -28,7 +28,6 @@ __all__ = (
     "TypeAlias",
     "TypeForm",
     "annotation_counts",
-    "any_count",
     "collect_symbols",
     "is_annotated",
 )
@@ -252,18 +251,18 @@ def annotation_counts(type_: TypeForm, /) -> tuple[int, int]:
             return 0, 0
 
 
-def any_count(type_: TypeForm, /) -> int:
+def _any_count(type_: TypeForm, /) -> int:
     """Count the number of annotatable slots that are ``ANY``."""
     match type_:
         case _TypeMarker.ANY:
             return 1
         case Function(overloads=overloads):
             return sum(
-                any_count(o.returns) + sum(any_count(p.annotation) for p in o.params)
+                _any_count(o.returns) + sum(_any_count(p.annotation) for p in o.params)
                 for o in overloads
             )
         case Class(members=members):
-            return sum(any_count(m) for m in members)
+            return sum(_any_count(m) for m in members)
         case _:
             return 0
 
