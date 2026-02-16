@@ -26,7 +26,7 @@ async def _parse_ini_sections(path: anyio.Path, /) -> configparser.ConfigParser:
 
 
 async def _parse_pyproject_tool(path: anyio.Path, /) -> dict[str, Incomplete] | None:
-    """Return the ``[tool]`` table from a ``pyproject.toml``, or *None*."""
+    """Return the `[tool]` table from a `pyproject.toml`, or *None*."""
     parsed = tomllib.loads(await path.read_text())
     tool = parsed.get("tool")
     return tool if isinstance(tool, dict) else None
@@ -43,7 +43,7 @@ class TypecheckerConfig(abc.ABC):
         each paired with a coroutine function that parses the file.
 
         Checked in order; the first file that exists **and** yields a
-        non-``None`` result wins.
+        non-`None` result wins.
         """
 
     @property
@@ -142,7 +142,7 @@ class MypyConfig(TypecheckerConfig):
 
     @staticmethod
     async def _parse_pyproject(path: anyio.Path, /) -> dict[str, Incomplete] | None:
-        """Parse mypy config from ``[tool.mypy]``."""
+        """Parse mypy config from `[tool.mypy]`."""
         if (tool := await _parse_pyproject_tool(path)) is None:
             return None
         if not isinstance(mypy := tool.get("mypy"), dict):
@@ -155,7 +155,7 @@ _mypy = MypyConfig()
 
 async def mypy_config(project_dir: StrPath, /) -> dict[str, Incomplete] | None:
     """
-    Returns the mypy config for the given project directory, or ``None``
+    Returns the mypy config for the given project directory, or `None`
     if no config is found.
 
     See https://mypy.readthedocs.io/en/stable/config_file.html
@@ -180,13 +180,13 @@ class PyreflyConfig(TypecheckerConfig):
 
     @staticmethod
     async def _parse_toml(path: anyio.Path, /) -> dict[str, Incomplete] | None:
-        """Parse a ``pyrefly.toml`` file."""
+        """Parse a `pyrefly.toml` file."""
         parsed = tomllib.loads(await path.read_text())
         return dict(parsed) if parsed else None
 
     @staticmethod
     async def _parse_pyproject(path: anyio.Path, /) -> dict[str, Incomplete] | None:
-        """Parse Pyrefly config from ``[tool.pyrefly]``."""
+        """Parse Pyrefly config from `[tool.pyrefly]`."""
         if (tool := await _parse_pyproject_tool(path)) is None:
             return None
         if not isinstance(pyrefly := tool.get("pyrefly"), dict):
@@ -199,7 +199,7 @@ _pyrefly = PyreflyConfig()
 
 async def pyrefly_config(project_dir: StrPath, /) -> dict[str, Incomplete] | None:
     """
-    Returns the Pyrefly config for the given project directory, or ``None``
+    Returns the Pyrefly config for the given project directory, or `None`
     if no config is found.
 
     See https://pyrefly.org/en/docs/configuration/
@@ -238,13 +238,13 @@ class TyConfig(TypecheckerConfig):
 
     @staticmethod
     async def _parse_toml(path: anyio.Path, /) -> dict[str, Incomplete] | None:
-        """Parse a ``ty.toml`` file."""
+        """Parse a `ty.toml` file."""
         parsed = tomllib.loads(await path.read_text())
         return dict(parsed) if parsed else None
 
     @staticmethod
     async def _parse_pyproject(path: anyio.Path, /) -> dict[str, Incomplete] | None:
-        """Parse ty config from ``[tool.ty]``."""
+        """Parse ty config from `[tool.ty]`."""
         if (tool := await _parse_pyproject_tool(path)) is None:
             return None
         if not isinstance(ty := tool.get("ty"), dict):
@@ -257,7 +257,7 @@ _ty = TyConfig()
 
 async def ty_config(project_dir: StrPath, /) -> dict[str, Incomplete] | None:
     """
-    Returns the ty config for the given project directory, or ``None``
+    Returns the ty config for the given project directory, or `None`
     if no config is found.
 
     See https://docs.astral.sh/ty/configuration/
@@ -279,7 +279,7 @@ class ZubanConfig(TypecheckerConfig):
 
     @staticmethod
     async def _parse_pyproject(path: anyio.Path, /) -> dict[str, Incomplete] | None:
-        """Parse Zuban config from ``[tool.zuban]``."""
+        """Parse Zuban config from `[tool.zuban]`."""
         if (tool := await _parse_pyproject_tool(path)) is None:
             return None
         if not isinstance(zuban := tool.get("zuban"), dict):
@@ -292,7 +292,7 @@ _zuban = ZubanConfig()
 
 async def zuban_config(project_dir: StrPath, /) -> dict[str, Incomplete] | None:
     """
-    Returns the Zuban config for the given project directory, or ``None``
+    Returns the Zuban config for the given project directory, or `None`
     if no config is found.
 
     See https://docs.zubanls.com/en/latest/usage.html#configuration

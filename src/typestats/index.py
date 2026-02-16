@@ -50,7 +50,7 @@ _ANY_FQNS: Final[frozenset[str]] = frozenset({
     "_typeshed.sentinel",
     "_typeshed.AnnotationForm",
 })
-# FQNs that are considered equivalent to ``Any`` only in input positions.
+# FQNs that are considered equivalent to `Any` only in input positions.
 _PARAM_ANY_FQNS: Final[frozenset[str]] = frozenset({"builtins.object"})
 
 
@@ -63,7 +63,7 @@ def _is_excluded_path(path: str, /, *, prefix: str = "") -> bool:
 
     When *prefix* is given, it is stripped before inspecting the remaining
     path components so that the project directory itself does not trigger
-    false positives (e.g. a project stored under a ``tests/`` directory).
+    false positives (e.g. a project stored under a `tests/` directory).
     """
     rel = path.removeprefix(prefix).lstrip("/")
     parts = rel.split("/")
@@ -176,7 +176,7 @@ def sources_to_module_paths(
     init_dirs = frozenset(p.parent for p in init_files)
 
     def _in_namespace_package(source: anyio.Path) -> bool:
-        """True when *source* sits in a directory without ``__init__`` that is
+        """True when *source* sits in a directory without `__init__` that is
         nested inside a proper package directory.  Such directories are not
         importable (e.g. vendored third-party code) and should be excluded."""
 
@@ -222,7 +222,7 @@ def _resolve_expr_name(name: str, import_map: Mapping[str, str], mod: str) -> st
     """Resolve a dotted name to its FQN using the module's import map.
 
     Looks up the whole *name* first, then tries to resolve just the first
-    component (for ``import typing; typing.Any`` style access), and finally
+    component (for `import typing; typing.Any` style access), and finally
     falls back to treating it as a module-local name.
     """
     if name in import_map:
@@ -235,7 +235,7 @@ def _resolve_expr_name(name: str, import_map: Mapping[str, str], mod: str) -> st
 
 
 def _resolves_to_any(fqn: str, alias_targets: Mapping[str, str]) -> bool:
-    """Check if *fqn* ultimately resolves to ``typing.Any`` through alias chains."""
+    """Check if *fqn* ultimately resolves to `typing.Any` through alias chains."""
     seen: set[str] = set()
     current = fqn
     while current not in seen:
@@ -256,13 +256,14 @@ def _unfold_any(
     *,
     is_param: bool = False,
 ) -> analyze.TypeForm:
-    """Replace ``Expr`` annotations that resolve to ``Any`` with ``ANY``.
+    """Replace `Expr` annotations that resolve to `Any` with `ANY`.
 
     Walks *type_* recursively so that function parameters, return types, and
     class members are all checked.
 
-    When *is_param* is ``True``, annotations in ``_PARAM_ANY_FQNS`` (e.g.
-    ``builtins.object``) are also replaced with ``ANY``.
+    When *is_param* is `True`, annotations in `_PARAM_ANY_FQNS` (e.g.
+    `typing.Any`) are also replaced with `ANY`, or when it is the (unimported) builtin
+    name `object`.
     """
     match type_:
         case analyze.Expr(expr=expr):
@@ -364,10 +365,10 @@ async def collect_public_symbols(  # noqa: C901, PLR0912, PLR0914, PLR0915
     # Step 1.5: Normalize Any-equivalent annotations
     #
     # Build a table mapping type-alias FQNs to the FQN of their RHS
-    # value, then walk every entry in ``all_local`` and replace any
-    # ``Expr`` annotation that resolves to ``typing.Any`` (directly or
-    # through alias chains) with ``ANY``.  Also treats ``object`` in
-    # input (parameter) positions as ``ANY``.
+    # value, then walk every entry in `all_local` and replace any
+    # `Expr` annotation that resolves to `typing.Any` (directly or
+    # through alias chains) with `ANY`.  Also treats `object` in
+    # input (parameter) positions as `ANY`.
     alias_targets: dict[str, str] = {}
     path_to_mod: dict[anyio.Path, str] = {}
     import_maps: dict[str, dict[str, str]] = {}
@@ -418,7 +419,7 @@ async def collect_public_symbols(  # noqa: C901, PLR0912, PLR0914, PLR0915
         return fqn
 
     def module_exports(mod: str) -> dict[str, str]:  # noqa: C901, PLR0912
-        """Return ``{export_name: origin_fqn}`` for all names exported by *mod*."""
+        """Return `{export_name: origin_fqn}` for all names exported by *mod*."""
         if mod in exports_cache:
             return exports_cache[mod]
         exports_cache[mod] = {}  # break cycles
