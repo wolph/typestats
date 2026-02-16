@@ -3,6 +3,7 @@ import textwrap
 import libcst as cst
 
 from typestats.analyze import (
+    ANY,
     EXTERNAL,
     KNOWN,
     UNKNOWN,
@@ -594,6 +595,7 @@ class TestClassMethodAlias:
 class TestIsAnnotated:
     def test_markers(self) -> None:
         assert not is_annotated(UNKNOWN)
+        assert is_annotated(ANY)
         assert not is_annotated(KNOWN)
         assert not is_annotated(EXTERNAL)
 
@@ -723,6 +725,46 @@ class TestIsAnnotated:
         )
         assert is_annotated(func)
 
+    def test_function_all_any_annotated(self) -> None:
+        """A function where all params and return are ANY is annotated."""
+        func = Function(
+            "f",
+            (
+                Overload(
+                    (
+                        Param("x", ParamKind.POSITIONAL_OR_KEYWORD, ANY),
+                        Param("y", ParamKind.POSITIONAL_OR_KEYWORD, ANY),
+                    ),
+                    ANY,
+                ),
+            ),
+        )
+        assert is_annotated(func)
+
+    def test_function_mixed_any_and_expr_annotated(self) -> None:
+        """A function with at least one non-ANY annotation is annotated."""
+        func = Function(
+            "f",
+            (
+                Overload(
+                    (
+                        Param("x", ParamKind.POSITIONAL_OR_KEYWORD, ANY),
+                        Param(
+                            "y",
+                            ParamKind.POSITIONAL_OR_KEYWORD,
+                            Expr(cst.Name("int")),
+                        ),
+                    ),
+                    ANY,
+                ),
+            ),
+        )
+        assert is_annotated(func)
+
+    def test_class_with_any_member(self) -> None:
+        """A class with an ANY attribute is annotated."""
+        assert is_annotated(Class("Foo", members=(ANY,)))
+
 
 class TestImplicitClassmethodDunders:
     """__new__, __init_subclass__, __class_getitem__, and regular methods
@@ -778,6 +820,9 @@ class TestImplicitClassmethodDunders:
 class TestAnnotationCounts:
     def test_unknown(self) -> None:
         assert annotation_counts(UNKNOWN) == (0, 1)
+
+    def test_any(self) -> None:
+        assert annotation_counts(ANY) == (1, 1)
 
     def test_known(self) -> None:
         assert annotation_counts(KNOWN) == (0, 0)
@@ -918,3 +963,43 @@ class TestAnnotationCounts:
         """KNOWN members (dataclass fields, enum values) are 0/0."""
         cls = Class("Foo", members=(KNOWN, KNOWN))
         assert annotation_counts(cls) == (0, 0)
+
+    def test_function_all_any(self) -> None:
+        """ALL ANY params + return counts as all annotated."""
+        func = Function(
+            "f",
+            (
+                Overload(
+                    (
+                        Param("x", ParamKind.POSITIONAL_OR_KEYWORD, ANY),
+                        Param("y", ParamKind.POSITIONAL_OR_KEYWORD, ANY),
+                    ),
+                    ANY,
+                ),
+            ),
+        )
+        assert annotation_counts(func) == (3, 3)
+
+    def test_function_mixed_any_and_expr(self) -> None:
+        func = Function(
+            "f",
+            (
+                Overload(
+                    (
+                        Param("x", ParamKind.POSITIONAL_OR_KEYWORD, ANY),
+                        Param(
+                            "y",
+                            ParamKind.POSITIONAL_OR_KEYWORD,
+                            Expr(cst.Name("int")),
+                        ),
+                    ),
+                    Expr(cst.Name("str")),
+                ),
+            ),
+        )
+        # x: ANY (1/1), y: int (1/1), return: str (1/1) = (3, 3)
+        assert annotation_counts(func) == (3, 3)
+
+    def test_class_with_any_member(self) -> None:
+        cls = Class("Foo", members=(ANY,))
+        assert annotation_counts(cls) == (1, 1)

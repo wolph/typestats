@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Final
 
 import anyio
 import mainpy
+from libcst.helpers import get_full_name_for_node
 
 from typestats import _ruff, analyze
 
@@ -40,6 +41,8 @@ _EXCLUDED_DIR_NAMES: Final[frozenset[str]] = frozenset({
 _EXCLUDED_FILE_NAMES: Final[frozenset[str]] = frozenset({"conftest.py"})
 # Module-level dunder names that are not real symbols for typing purposes.
 _MODULE_DUNDERS: Final[frozenset[str]] = frozenset({"__all__", "__doc__"})
+# Fully qualified names that are considered equivalent to having no annotation.
+_ANY_FQNS: Final[frozenset[str]] = frozenset({"typing.Any", "typing_extensions.Any"})
 
 
 def _is_public(name: str) -> bool:
@@ -206,12 +209,86 @@ def sources_to_module_paths(
     return {k: frozenset(ps) for k, ps in module_paths.items()}
 
 
+def _resolve_expr_name(name: str, import_map: Mapping[str, str], mod: str) -> str:
+    """Resolve a dotted name to its FQN using the module's import map.
+
+    Looks up the whole *name* first, then tries to resolve just the first
+    component (for ``import typing; typing.Any`` style access), and finally
+    falls back to treating it as a module-local name.
+    """
+    if name in import_map:
+        return import_map[name]
+
+    first, _, rest = name.partition(".")
+    if rest and first in import_map:
+        return f"{import_map[first]}.{rest}"
+    return f"{mod}.{name}"
+
+
+def _resolves_to_any(fqn: str, alias_targets: Mapping[str, str]) -> bool:
+    """Check if *fqn* ultimately resolves to ``typing.Any`` through alias chains."""
+    seen: set[str] = set()
+    current = fqn
+    while current not in seen:
+        if current in _ANY_FQNS:
+            return True
+        if current not in alias_targets:
+            return False
+        seen.add(current)
+        current = alias_targets[current]
+    return False
+
+
+def _unfold_any(
+    type_: analyze.TypeForm,
+    import_map: Mapping[str, str],
+    mod: str,
+    alias_targets: Mapping[str, str],
+) -> analyze.TypeForm:
+    """Replace ``Expr`` annotations that resolve to ``Any`` with ``ANY``.
+
+    Walks *type_* recursively so that function parameters, return types, and
+    class members are all checked.
+    """
+    match type_:
+        case analyze.Expr(expr=expr):
+            name = get_full_name_for_node(expr)
+            if name is not None:
+                fqn = _resolve_expr_name(name, import_map, mod)
+                if _resolves_to_any(fqn, alias_targets):
+                    return analyze.ANY
+            return type_
+        case analyze.Function(name=fn_name, overloads=overloads):
+            new_overloads = tuple(
+                analyze.Overload(
+                    tuple(
+                        analyze.Param(
+                            p.name,
+                            p.kind,
+                            _unfold_any(p.annotation, import_map, mod, alias_targets),
+                        )
+                        for p in o.params
+                    ),
+                    _unfold_any(o.returns, import_map, mod, alias_targets),
+                )
+                for o in overloads
+            )
+            return analyze.Function(fn_name, (new_overloads[0], *new_overloads[1:]))
+        case analyze.Class(name=cls_name, members=members):
+            return analyze.Class(
+                cls_name,
+                tuple(_unfold_any(m, import_map, mod, alias_targets) for m in members),
+            )
+        case _:
+            return type_
+
+
 def _is_public_module(module_path: str, /) -> bool:
     """Check if all parts of a dotted module path are public."""
     return all(not part.startswith("_") for part in module_path.split("."))
 
 
-async def collect_public_symbols(  # noqa: C901, PLR0915
+async def collect_public_symbols(  # noqa: C901, PLR0912, PLR0914, PLR0915
     project_dir: StrPath,
     /,
 ) -> Mapping[anyio.Path, Sequence[analyze.Symbol]]:
@@ -257,6 +334,48 @@ async def collect_public_symbols(  # noqa: C901, PLR0915
 
         module_data[mod] = entries
         module_locals[mod] = local
+
+    # Step 1.5: Resolve type aliases that point to `Any`
+    #
+    # Build a table mapping type-alias FQNs to the FQN of their RHS
+    # value, then walk every entry in ``all_local`` and replace any
+    # ``Expr`` annotation that resolves to ``typing.Any`` (directly or
+    # through alias chains) with ``ANY``.
+    alias_targets: dict[str, str] = {}
+    path_to_mod: dict[anyio.Path, str] = {}
+    module_import_maps: dict[str, dict[str, str]] = {}
+    for mod, entries in module_data.items():
+        imap: dict[str, str] = {}
+        for syms in entries.values():
+            imap.update(syms.imports)
+        module_import_maps[mod] = imap
+
+        for path in entries:
+            path_to_mod[path] = mod
+
+        for syms in entries.values():
+            for alias in syms.type_aliases:
+                if (
+                    "." not in alias.name  # skip class-level aliases
+                    and isinstance(alias.value, analyze.Expr)
+                    and (value_name := get_full_name_for_node(alias.value.expr))
+                ):
+                    alias_fqn = f"{mod}.{alias.name}"
+                    alias_targets[alias_fqn] = _resolve_expr_name(value_name, imap, mod)
+
+    if alias_targets:
+        for fqn, (path, type_) in list(all_local.items()):
+            if (p2m := path_to_mod.get(path)) is None:
+                continue
+
+            new_type = _unfold_any(
+                type_,
+                module_import_maps.get(p2m, {}),
+                p2m,
+                alias_targets,
+            )
+            if new_type is not type_:
+                all_local[fqn] = (path, new_type)
 
     # Step 2: Compute module exports with origin tracing
     exports_cache: dict[str, dict[str, str]] = {}

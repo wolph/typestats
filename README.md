@@ -24,7 +24,8 @@ For a given project:
    - type aliases (`_: TypeAlias = ...` and `type _ = ...`)
    - type-ignore comments (`# (type|pyright|pyrefly|ty): ignore`)
    - overloaded functions/methods
-7. TODO: Inline type aliases where used in annotations (so we can determine the `Any`-ness)
+7. Unfold type aliases to detect `Any` annotations (direct `typing.Any` usage, local aliases like
+   `type Unknown = Any`, and cross-module alias chains)
 8. TODO: Unify `.py` and `.pyi` annotations for each symbol
 9. Resolve public symbols via origin-tracing (follow re-export chains to their defining module)
 10. Collect the type-checker configs to see which strictness flags are used and which
@@ -66,6 +67,9 @@ Per-module (via `libcst`):
 - **`Annotated` unwrapping**: `Annotated[T, ...]` → `T`
   ([spec](https://typing.python.org/en/latest/spec/qualifiers.html#annotated))
 - **Aliased typing imports**: `import typing as t` resolved via `QualifiedNameProvider`
+- **`Any` detection**: annotations that resolve to `typing.Any`—whether used directly, through
+  local type aliases (`type Unknown = Any`), or cross-module alias chains—are marked `ANY` and
+  tracked separately, but still count as annotated for coverage purposes
 
 Cross-module (via import graph):
 

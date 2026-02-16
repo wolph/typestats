@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Collection, Mapping
 
 __all__ = (
+    "ANY",
     "IgnoreComment",
     "ModuleSymbols",
     "Symbol",
@@ -73,6 +74,7 @@ class ParamKind(StrEnum):
 class _TypeMarker(StrEnum):
     KNOWN = ""  # for `self` and `cls` parameters
     UNKNOWN = "?"  # for other missing annotations
+    ANY = "any"  # for annotations that resolve to `typing.Any`
     EXTERNAL = "~"  # for re-exports from external (non-local) packages
 
     @override
@@ -82,11 +84,13 @@ class _TypeMarker(StrEnum):
 
 type _UnknownType = Literal[_TypeMarker.UNKNOWN]
 type _KnownType = Literal[_TypeMarker.KNOWN]
+type _AnyType = Literal[_TypeMarker.ANY]
 type _ExternalType = Literal[_TypeMarker.EXTERNAL]
 
 
 UNKNOWN: Final[_UnknownType] = _TypeMarker.UNKNOWN
 KNOWN: Final[_KnownType] = _TypeMarker.KNOWN
+ANY: Final[_AnyType] = _TypeMarker.ANY
 EXTERNAL: Final[_ExternalType] = _TypeMarker.EXTERNAL
 
 type _NameResolver = Callable[[cst.CSTNode], str | None]
@@ -95,9 +99,13 @@ type _NameResolver = Callable[[cst.CSTNode], str | None]
 def is_annotated(type_: TypeForm, /) -> bool:
     """Check if a type form represents a meaningfully annotated symbol.
 
-    Returns ``False`` for ``UNKNOWN``, ``KNOWN``, ``EXTERNAL``, and for
-    ``Function`` types where every parameter and the return type are
-    ``UNKNOWN``.  Note: *self*/*cls* parameters are excluded during parsing.
+    Returns ``True`` for ``Expr``, ``ANY``, and for ``Function``/``Class``
+    types that are annotated (see below).  Returns ``False`` for ``UNKNOWN``,
+    ``KNOWN``, ``EXTERNAL``, and unannotated ``Function``/``Class`` types.
+    Note: *self*/*cls* parameters are excluded during parsing.
+
+    For ``Function`` types, the function is annotated when at least one
+    overload has an annotated return type or parameter.
 
     For ``Class`` types, the class is only considered annotated when **all**
     of its members (stored in ``Class.members``) are also annotated.
@@ -105,16 +113,10 @@ def is_annotated(type_: TypeForm, /) -> bool:
     considered annotated.  A class with no members is considered annotated.
     """
     match type_:
-        case Expr():
+        case Expr() | _TypeMarker.ANY:
             return True
-        case Class(members=members):
-            return all(m is KNOWN or is_annotated(m) for m in members)
-        case Function(overloads=overloads):
-            return any(
-                overload.returns is not UNKNOWN
-                or any(param.annotation is not UNKNOWN for param in overload.params)
-                for overload in overloads
-            )
+        case Function() | Class():
+            return type_.is_annotated
         case _:
             return False
 
@@ -154,6 +156,10 @@ class Param:
     kind: ParamKind
     annotation: TypeForm
 
+    @property
+    def is_annotated(self) -> bool:
+        return is_annotated(self.annotation)
+
     @override
     def __str__(self) -> str:
         return f"{self.kind.prefix()}{self.name}: {self.annotation}"
@@ -164,19 +170,22 @@ class Overload:
     params: tuple[Param, ...]
     returns: TypeForm
 
-    @override
-    def __str__(self) -> str:
-        params = ", ".join(str(param) for param in self.params)
-        return f"({params}) -> {self.returns}"
+    @property
+    def is_annotated(self) -> bool:
+        return is_annotated(self.returns) or any(p.is_annotated for p in self.params)
 
     @property
     def annotation_counts(self) -> tuple[int, int]:
         """``(annotated, annotatable)`` counts for params + return."""
-        annotated = sum(1 for p in self.params if p.annotation is not UNKNOWN)
-        annotatable = len(self.params) + 1  # params + return
-        if self.returns is not UNKNOWN:
+        annotated = sum(1 for p in self.params if p.is_annotated)
+        if is_annotated(self.returns):
             annotated += 1
-        return annotated, annotatable
+        return annotated, len(self.params) + 1  # params + return
+
+    @override
+    def __str__(self) -> str:
+        params = ", ".join(str(param) for param in self.params)
+        return f"({params}) -> {self.returns}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,6 +198,10 @@ class Function:
             msg = "FunctionOverloads must have at least one signature"
             raise ValueError(msg)
 
+    @property
+    def is_annotated(self) -> bool:
+        return any(o.is_annotated for o in self.overloads)
+
     @override
     def __str__(self) -> str:
         if len(self.overloads) == 1:
@@ -199,13 +212,8 @@ class Function:
     @property
     def annotation_counts(self) -> tuple[int, int]:
         """``(annotated, annotatable)`` counts across all overloads."""
-        annotated = 0
-        annotatable = 0
-        for o in self.overloads:
-            a, t = o.annotation_counts
-            annotated += a
-            annotatable += t
-        return annotated, annotatable
+        counts = [o.annotation_counts for o in self.overloads]
+        return sum(a for a, _ in counts), sum(t for _, t in counts)
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,20 +221,19 @@ class Class:
     name: str
     members: tuple[TypeForm, ...] = ()
 
-    @override
-    def __str__(self) -> str:
-        return f"type[{self.name}]"
+    @property
+    def is_annotated(self) -> bool:
+        return all(m is KNOWN or is_annotated(m) for m in self.members)
 
     @property
     def annotation_counts(self) -> tuple[int, int]:
         """``(annotated, annotatable)`` counts across all members."""
-        annotated = 0
-        annotatable = 0
-        for m in self.members:
-            a, t = annotation_counts(m)
-            annotated += a
-            annotatable += t
-        return annotated, annotatable
+        counts = [annotation_counts(m) for m in self.members]
+        return sum(a for a, _ in counts), sum(t for _, t in counts)
+
+    @override
+    def __str__(self) -> str:
+        return f"type[{self.name}]"
 
 
 def annotation_counts(type_: TypeForm, /) -> tuple[int, int]:
@@ -235,6 +242,8 @@ def annotation_counts(type_: TypeForm, /) -> tuple[int, int]:
         case Function() | Class():
             return type_.annotation_counts
         case Expr():
+            return 1, 1
+        case _TypeMarker.ANY:
             return 1, 1
         case _TypeMarker.UNKNOWN:
             return 0, 1

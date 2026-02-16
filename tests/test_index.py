@@ -6,6 +6,8 @@ import pytest
 from typestats import analyze
 from typestats.index import (
     _is_excluded_path,
+    _resolve_expr_name,
+    _resolves_to_any,
     collect_public_symbols,
     sources_to_module_paths,
 )
@@ -268,3 +270,123 @@ def test_collect_public_symbols_same_name_module_not_unknown() -> None:
 
     assert "mylib._core._ops.do_mul.do_mul" in types
     assert types["mylib._core._ops.do_mul.do_mul"] is not analyze.UNKNOWN
+
+
+class TestResolveExprName:
+    def test_direct_import(self) -> None:
+        assert _resolve_expr_name("Any", {"Any": "typing.Any"}, "mod") == "typing.Any"
+
+    def test_dotted_import(self) -> None:
+        assert (
+            _resolve_expr_name("typing.Any", {"typing": "typing"}, "mod")
+            == "typing.Any"
+        )
+
+    def test_aliased_import(self) -> None:
+        assert _resolve_expr_name("t.Any", {"t": "typing"}, "mod") == "typing.Any"
+
+    def test_local_fallback(self) -> None:
+        assert _resolve_expr_name("Unknown", {}, "mymod") == "mymod.Unknown"
+
+
+class TestResolvesToAny:
+    def test_typing_any(self) -> None:
+        assert _resolves_to_any("typing.Any", {})
+
+    def test_typing_extensions_any(self) -> None:
+        assert _resolves_to_any("typing_extensions.Any", {})
+
+    def test_not_any(self) -> None:
+        assert not _resolves_to_any("builtins.int", {})
+
+    def test_alias_chain(self) -> None:
+        aliases = {
+            "mod.Unknown": "typing.Any",
+        }
+        assert _resolves_to_any("mod.Unknown", aliases)
+
+    def test_chained_aliases(self) -> None:
+        aliases = {
+            "mod.Chained": "mod.Unknown",
+            "mod.Unknown": "typing.Any",
+        }
+        assert _resolves_to_any("mod.Chained", aliases)
+
+    def test_circular_alias_not_any(self) -> None:
+        aliases = {
+            "mod.A": "mod.B",
+            "mod.B": "mod.A",
+        }
+        assert not _resolves_to_any("mod.A", aliases)
+
+    def test_alias_to_non_any(self) -> None:
+        aliases = {
+            "mod.MyInt": "builtins.int",
+        }
+        assert not _resolves_to_any("mod.MyInt", aliases)
+
+
+def test_collect_public_symbols_direct_any_is_any() -> None:
+    """Symbols annotated with `typing.Any` should be ANY."""
+    types = _public_symbol_types(_PROJECT)
+
+    assert "anypkg.mod.any_var" in types
+    assert types["anypkg.mod.any_var"] is analyze.ANY
+
+
+def test_collect_public_symbols_alias_to_any_is_any() -> None:
+    """Symbols annotated with a type alias that resolves to Any should be ANY."""
+    types = _public_symbol_types(_PROJECT)
+
+    # Unknown is defined as `type Unknown = Any` in _defs
+    assert "anypkg.mod.unknown_var" in types
+    assert types["anypkg.mod.unknown_var"] is analyze.ANY
+
+
+def test_collect_public_symbols_chained_alias_to_any_is_any() -> None:
+    """Aliases through multiple levels should still resolve to ANY."""
+    types = _public_symbol_types(_PROJECT)
+
+    # Chained is defined as `type Chained = Unknown`, Unknown → Any
+    assert "anypkg.mod.chained_var" in types
+    assert types["anypkg.mod.chained_var"] is analyze.ANY
+
+
+def test_collect_public_symbols_cross_module_alias_to_any_is_any() -> None:
+    """Type aliases imported from other modules should be resolved."""
+    types = _public_symbol_types(_PROJECT)
+
+    # Remote is `type Remote = Any` in _defs, used in mod
+    assert "anypkg.mod.remote_var" in types
+    assert types["anypkg.mod.remote_var"] is analyze.ANY
+
+
+def test_collect_public_symbols_non_any_alias_not_any() -> None:
+    """Type aliases that don't resolve to Any should remain annotated."""
+    types = _public_symbol_types(_PROJECT)
+
+    # NotAny is `type NotAny = int`, so not_any_alias_var should still be annotated
+    assert "anypkg.mod.not_any_alias_var" in types
+    assert types["anypkg.mod.not_any_alias_var"] is not analyze.ANY
+
+    assert "anypkg.mod.normal_var" in types
+    assert types["anypkg.mod.normal_var"] is not analyze.ANY
+
+
+def test_collect_public_symbols_function_any_params_unfolded() -> None:
+    """Function params annotated with Any aliases should be unfolded to ANY."""
+    types = _public_symbol_types(_PROJECT)
+
+    assert "anypkg.mod.annotated_func" in types
+    func = types["anypkg.mod.annotated_func"]
+    assert isinstance(func, analyze.Function)
+
+    overload = func.overloads[0]
+    # param `a: Unknown` should be ANY (Unknown → Any)
+    assert overload.params[0].name == "a"
+    assert overload.params[0].annotation is analyze.ANY
+    # param `b: int` should remain annotated
+    assert overload.params[1].name == "b"
+    assert overload.params[1].annotation is not analyze.ANY
+    # return `str` should remain annotated
+    assert overload.returns is not analyze.ANY
