@@ -280,7 +280,7 @@ class IgnoreComment:
     def __str__(self) -> str:
         if self.rules is None:
             return f"{self.kind}: ignore"
-        return f"{self.kind}: ignore[{', '.join(sorted(self.rules))}]"
+        return f"{self.kind}: ignore[{', '.join(self.rules)}]"
 
 
 @dataclass(frozen=True, slots=True)

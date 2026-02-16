@@ -476,7 +476,7 @@ async def collect_public_symbols(  # noqa: C901, PLR0912, PLR0914, PLR0915
                 public.setdefault(f"{mod}.{name}", (first_path, type_))
 
     result: defaultdict[anyio.Path, list[analyze.Symbol]] = defaultdict(list)
-    for fqn, (path, type_) in sorted(public.items()):
+    for fqn, (path, type_) in public.items():
         result[path].append(analyze.Symbol(fqn, type_))
 
     elapsed = time.perf_counter() - t0

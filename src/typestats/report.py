@@ -254,10 +254,7 @@ class PackageReport:
         """Build a `PackageReport` from collected public symbols."""
         files = tuple(
             ModuleReport.from_symbols(source_path.relative_to(base_path), symbols)
-            for source_path, symbols in sorted(
-                public_symbols.items(),
-                key=lambda kv: str(kv[0]),
-            )
+            for source_path, symbols in public_symbols.items()
         )
         return cls(package, files)
 
