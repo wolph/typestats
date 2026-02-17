@@ -134,7 +134,7 @@ async def fetch_project_detail(
 
 async def fetch_top_packages(client: httpx.AsyncClient, n: int, /) -> list[TopPackage]:
     """Fetch the top *n* most-downloaded PyPI packages (over the last 30 days)."""
-    assert n >= 0, "n must be a non-negative integer"
+    assert n > 0, "n must be a positive integer"
     # the CSV is less than half the size of the minified JSON
     data = await _get_csv(client, TOP_30D)
     return [
@@ -243,7 +243,7 @@ async def example() -> None:
     async with retry_client() as client:
         if sys.argv[1:]:
             project = sys.argv[1]
-            path = await download_sdist_latest(client, project, "./projects")
+            path, _ = await download_sdist_latest(client, project, "./projects")
             print(f"Downloaded {project} to {path}")  # noqa: T201
         else:
             top_packages = await fetch_top_packages(client, 42)
