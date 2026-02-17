@@ -1,5 +1,6 @@
 import abc
 import configparser
+import json
 import os
 import tomllib
 from pathlib import Path
@@ -18,6 +19,7 @@ __all__ = (
     "discover_configs",
     "mypy_config",
     "pyrefly_config",
+    "pyright_config",
     "ty_config",
     "zuban_config",
 )
@@ -25,7 +27,7 @@ __all__ = (
 
 type _AsyncParser = Callable[[anyio.Path], Awaitable[dict[str, Incomplete] | None]]
 type TypeCheckerConfigDict = dict[str, Incomplete]
-type TypeCheckerName = Literal["mypy", "pyrefly", "ty", "zuban"]
+type TypeCheckerName = Literal["mypy", "pyright", "pyrefly", "ty", "zuban"]
 
 
 async def _parse_ini_sections(path: anyio.Path, /) -> configparser.ConfigParser:
@@ -171,6 +173,51 @@ async def mypy_config(project_dir: StrPath, /) -> TypeCheckerConfigDict | None:
     See https://mypy.readthedocs.io/en/stable/config_file.html
     """
     return await _mypy.find(project_dir)
+
+
+class PyrightConfig(TypecheckerConfig):
+    """
+    Discover and parse Pyright configuration.
+
+    See https://microsoft.github.io/pyright/#/configuration
+    """
+
+    @property
+    @override
+    def _project_config_files(self) -> Sequence[tuple[str, _AsyncParser]]:
+        return (
+            ("pyrightconfig.json", self._parse_json),
+            ("pyproject.toml", self._parse_pyproject),
+        )
+
+    @staticmethod
+    async def _parse_json(path: anyio.Path, /) -> dict[str, Incomplete] | None:
+        """Parse a ``pyrightconfig.json`` file."""
+        text = await path.read_text()
+        parsed = json.loads(text)
+        return dict(parsed) if isinstance(parsed, dict) else None
+
+    @staticmethod
+    async def _parse_pyproject(path: anyio.Path, /) -> dict[str, Incomplete] | None:
+        """Parse Pyright config from ``[tool.pyright]``."""
+        if (tool := await _parse_pyproject_tool(path)) is None:
+            return None
+        if not isinstance(pyright := tool.get("pyright"), dict):
+            return None
+        return dict(pyright)
+
+
+_pyright = PyrightConfig()
+
+
+async def pyright_config(project_dir: StrPath, /) -> dict[str, Incomplete] | None:
+    """
+    Returns the Pyright config for the given project directory, or ``None``
+    if no config is found.
+
+    See https://microsoft.github.io/pyright/#/configuration
+    """
+    return await _pyright.find(project_dir)
 
 
 class PyreflyConfig(TypecheckerConfig):
@@ -327,6 +374,7 @@ async def discover_configs(
 
     async with anyio.create_task_group() as tg:
         tg.start_soon(_probe, "mypy", _mypy)
+        tg.start_soon(_probe, "pyright", _pyright)
         tg.start_soon(_probe, "pyrefly", _pyrefly)
         tg.start_soon(_probe, "ty", _ty)
         tg.start_soon(_probe, "zuban", _zuban)

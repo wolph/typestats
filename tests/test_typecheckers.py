@@ -1,3 +1,4 @@
+import json
 from typing import TYPE_CHECKING
 
 import pytest
@@ -6,6 +7,7 @@ from typestats.typecheckers import (
     discover_configs,
     mypy_config,
     pyrefly_config,
+    pyright_config,
     ty_config,
     zuban_config,
 )
@@ -178,6 +180,115 @@ class TestMypyConfig:
         """A mypy.ini without a [mypy] section should be skipped."""
         (tmp_path / "mypy.ini").write_text("[other]\nfoo = bar\n")
         assert await mypy_config(tmp_path) is None
+
+
+class TestPyrightConfig:
+    # --- no config ---
+
+    async def test_none(self, tmp_path: Path) -> None:
+        assert await pyright_config(tmp_path) is None
+
+    async def test_empty_pyproject(self, tmp_path: Path) -> None:
+        (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+        assert await pyright_config(tmp_path) is None
+
+    # --- pyrightconfig.json ---
+
+    async def test_pyrightconfig_json_basic(self, tmp_path: Path) -> None:
+        (tmp_path / "pyrightconfig.json").write_text(
+            '{"typeCheckingMode": "strict", "pythonVersion": "3.12"}',
+        )
+        config = await pyright_config(tmp_path)
+        assert config is not None
+        assert config["typeCheckingMode"] == "strict"
+        assert config["pythonVersion"] == "3.12"
+
+    async def test_pyrightconfig_json_with_include_exclude(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        (tmp_path / "pyrightconfig.json").write_text(
+            json.dumps({
+                "include": ["src"],
+                "exclude": ["**/node_modules", "**/__pycache__"],
+                "reportMissingImports": "error",
+            }),
+        )
+        config = await pyright_config(tmp_path)
+        assert config is not None
+        assert config["include"] == ["src"]
+        assert config["exclude"] == ["**/node_modules", "**/__pycache__"]
+        assert config["reportMissingImports"] == "error"
+
+    async def test_pyrightconfig_json_non_dict_skipped(self, tmp_path: Path) -> None:
+        """A pyrightconfig.json that contains a non-dict is skipped."""
+        (tmp_path / "pyrightconfig.json").write_text('"just a string"')
+        assert await pyright_config(tmp_path) is None
+
+    # --- pyproject.toml ---
+
+    async def test_pyproject_toml(self, tmp_path: Path) -> None:
+        (tmp_path / "pyproject.toml").write_text(
+            '[tool.pyright]\ntypeCheckingMode = "strict"\npythonVersion = "3.12"\n',
+        )
+        config = await pyright_config(tmp_path)
+        assert config is not None
+        assert config["typeCheckingMode"] == "strict"
+        assert config["pythonVersion"] == "3.12"
+
+    async def test_pyproject_toml_with_report_settings(self, tmp_path: Path) -> None:
+        (tmp_path / "pyproject.toml").write_text(
+            "[tool.pyright]\n"
+            'reportMissingImports = "error"\n'
+            "reportMissingTypeStubs = false\n",
+        )
+        config = await pyright_config(tmp_path)
+        assert config is not None
+        assert config["reportMissingImports"] == "error"
+        assert config["reportMissingTypeStubs"] is False
+
+    # --- discovery order / precedence ---
+
+    async def test_json_takes_precedence_over_pyproject(self, tmp_path: Path) -> None:
+        (tmp_path / "pyrightconfig.json").write_text('{"typeCheckingMode": "strict"}')
+        (tmp_path / "pyproject.toml").write_text(
+            '[tool.pyright]\ntypeCheckingMode = "basic"\n',
+        )
+        config = await pyright_config(tmp_path)
+        assert config is not None
+        assert config["typeCheckingMode"] == "strict"
+
+    # --- walk-up behaviour ---
+
+    async def test_walks_up_to_parent(self, tmp_path: Path) -> None:
+        (tmp_path / "pyrightconfig.json").write_text('{"typeCheckingMode": "strict"}')
+        child = tmp_path / "sub" / "pkg"
+        child.mkdir(parents=True)
+        config = await pyright_config(child)
+        assert config is not None
+        assert config["typeCheckingMode"] == "strict"
+
+    async def test_nearest_config_wins(self, tmp_path: Path) -> None:
+        """A config in a closer ancestor should win over one further up."""
+        (tmp_path / "pyrightconfig.json").write_text(
+            '{"typeCheckingMode": "basic"}',
+        )
+        child = tmp_path / "sub"
+        child.mkdir()
+        (child / "pyrightconfig.json").write_text('{"typeCheckingMode": "strict"}')
+        config = await pyright_config(child)
+        assert config is not None
+        assert config["typeCheckingMode"] == "strict"
+
+    async def test_walks_up_pyproject(self, tmp_path: Path) -> None:
+        (tmp_path / "pyproject.toml").write_text(
+            '[tool.pyright]\ntypeCheckingMode = "strict"\n',
+        )
+        child = tmp_path / "sub" / "pkg"
+        child.mkdir(parents=True)
+        config = await pyright_config(child)
+        assert config is not None
+        assert config["typeCheckingMode"] == "strict"
 
 
 class TestPyreflyConfig:
