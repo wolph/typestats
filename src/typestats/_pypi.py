@@ -2,7 +2,7 @@ import csv
 import io
 import logging
 import tarfile
-from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, TypedDict
 
 import anyio
 import anyio.to_thread
@@ -137,7 +137,10 @@ async def fetch_top_packages(client: httpx.AsyncClient, n: int, /) -> list[TopPa
     assert n >= 0, "n must be a non-negative integer"
     # the CSV is less than half the size of the minified JSON
     data = await _get_csv(client, TOP_30D)
-    return cast("list[TopPackage]", data[:n])
+    return [
+        {"project": r["project"], "download_count": int(r["download_count"])}
+        for r in data[:n]
+    ]
 
 
 def _latest_sdist(details: ProjectDetail, /) -> FileDetail:
@@ -248,7 +251,7 @@ async def example() -> None:
             wmax = max(len(pkg["project"]) for pkg in top_packages)
             print("Rank", "Package".ljust(wmax + 2), "Downloads (30 days)")  # noqa: T201
             for i, pkg in enumerate(top_packages, start=1):
-                dl = int(pkg["download_count"])
+                dl = pkg["download_count"]
                 print(  # noqa: T201
                     f"{i:4}",
                     f"{pkg['project']:<{wmax + 2}}",
