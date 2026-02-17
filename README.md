@@ -34,8 +34,8 @@ For a given project:
     - coverage (% of public symbols annotated)
     - strict coverage (% of public symbols annotated without `Any`)
     - TODO: average overload ratio (function without overloads counts as 1 overload)
-    - TODO: supported type-checkers + strictness flags
-      annotation kind (inline, bundled stubs, typeshed stubs, third-party stubs, etc)
+    - supported type-checkers + strictness flags
+    - TODO: annotation kind (inline, bundled stubs, typeshed stubs, third-party stubs, etc)
 12. TODO: Export the statistics for use in a website/dashboard (e.g. json, csv, or sqlite)
 
 ### Symbol collection

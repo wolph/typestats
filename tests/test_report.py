@@ -231,3 +231,21 @@ class TestPackageReport:
         assert r.n_annotated == 1
         assert r.n_any == 1
         assert r.n_unannotated == 1
+
+    def test_typechecker_configs_default_empty(self) -> None:
+        r = self._pkg(Symbol("a", _INT))
+        assert r.typecheckers == {}
+
+    def test_typechecker_configs_stored(self) -> None:
+        mod = ModuleReport.from_symbols("mod.py", [Symbol("a", _INT)])
+        r = PackageReport(
+            "pkg",
+            (mod,),
+            typecheckers={
+                "mypy": {"strict": True},
+                "ty": {"python-version": "3.14"},
+            },
+        )
+        assert len(r.typecheckers) == 2
+        assert "mypy" in r.typecheckers
+        assert "ty" in r.typecheckers

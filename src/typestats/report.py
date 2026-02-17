@@ -1,10 +1,12 @@
 import sys
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, Protocol, Self
 
 if TYPE_CHECKING:
     from _typeshed import StrPath
+
+    from typestats.typecheckers import TypeCheckerConfigDict, TypeCheckerName
 
 import anyio
 import mainpy
@@ -204,6 +206,9 @@ class ModuleReport:
 class PackageReport:
     package: str
     module_reports: tuple[ModuleReport, ...]
+    typecheckers: Mapping[TypeCheckerName, TypeCheckerConfigDict] = field(
+        default_factory=dict,
+    )
 
     @property
     def n_annotatable(self) -> int:
@@ -243,27 +248,45 @@ class PackageReport:
             f"({typed}/{self.n_annotatable} annotated, "
             f"{self.n_any} Any, {self.n_unannotated} missing)",
         )
+        if self.typecheckers:
+            checkers = ", ".join(sorted(self.typecheckers))
+            print(f"   Type-checkers: {checkers}")  # noqa: T201
 
     @classmethod
-    def from_symbols(
-        cls,
-        pkg: str,
-        path: StrPath,
-        symbols: Mapping[anyio.Path, _Symbols],
-    ) -> Self:
-        """Build a `PackageReport` from collected public symbols."""
+    async def from_path(cls, pkg: str, path: StrPath, /) -> Self:
+        """Build a `PackageReport` by analysing the package at *path*.
+
+        Runs `collect_public_symbols` and `discover_configs` concurrently.
+        """
+        from typestats.index import collect_public_symbols  # noqa: PLC0415
+        from typestats.typecheckers import discover_configs  # noqa: PLC0415
+
+        symbols: Mapping[anyio.Path, _Symbols] = {}
+        configs: Mapping[TypeCheckerName, TypeCheckerConfigDict] = {}
+
+        async def _collect() -> None:
+            nonlocal symbols
+            symbols = await collect_public_symbols(path)
+
+        async def _discover() -> None:
+            nonlocal configs
+            configs = await discover_configs(path)
+
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(_collect)
+            tg.start_soon(_discover)
+
         files = tuple(
             ModuleReport.from_symbols(src_path.relative_to(path), symbols)
             for src_path, symbols in symbols.items()
         )
-        return cls(pkg, files)
+        return cls(pkg, files, configs)
 
 
 @mainpy.main
 async def main() -> None:
     from typestats import _pypi  # noqa: PLC0415
     from typestats._http import retry_client  # noqa: PLC0415
-    from typestats.index import collect_public_symbols  # noqa: PLC0415
 
     package = sys.argv[1] if len(sys.argv) > 1 else "optype"
 
@@ -271,6 +294,5 @@ async def main() -> None:
         async with retry_client() as client:
             path, _ = await _pypi.download_sdist_latest(client, package, temp_dir)
 
-        public_symbols = await collect_public_symbols(path)
-        report = PackageReport.from_symbols(package, path, public_symbols)
+        report = await PackageReport.from_path(package, path)
         report.print()
