@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Literal, NamedTuple, Protocol, Self
 if TYPE_CHECKING:
     from _typeshed import StrPath
 
-    from typestats.typecheckers import TypeCheckerConfig, TypeCheckerName
+    from typestats.typecheckers import TypeCheckerConfigDict, TypeCheckerName
 
 import anyio
 import mainpy
@@ -206,7 +206,7 @@ class ModuleReport:
 class PackageReport:
     package: str
     module_reports: tuple[ModuleReport, ...]
-    typecheckers: Mapping[TypeCheckerName, TypeCheckerConfig] = field(
+    typecheckers: Mapping[TypeCheckerName, TypeCheckerConfigDict] = field(
         default_factory=dict,
     )
 
@@ -262,7 +262,7 @@ class PackageReport:
         from typestats.typecheckers import discover_configs  # noqa: PLC0415
 
         symbols: Mapping[anyio.Path, _Symbols] = {}
-        configs: Mapping[TypeCheckerName, TypeCheckerConfig] = {}
+        configs: Mapping[TypeCheckerName, TypeCheckerConfigDict] = {}
 
         async def _collect() -> None:
             nonlocal symbols

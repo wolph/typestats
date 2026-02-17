@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from _typeshed import Incomplete, StrPath  # noqa: PLC2701
 
 __all__ = (
-    "TypeCheckerConfig",
+    "TypeCheckerConfigDict",
     "TypeCheckerName",
     "discover_configs",
     "mypy_config",
@@ -24,7 +24,7 @@ __all__ = (
 
 
 type _AsyncParser = Callable[[anyio.Path], Awaitable[dict[str, Incomplete] | None]]
-type TypeCheckerConfig = dict[str, Incomplete]
+type TypeCheckerConfigDict = dict[str, Incomplete]
 type TypeCheckerName = Literal["mypy", "pyrefly", "ty", "zuban"]
 
 
@@ -35,7 +35,7 @@ async def _parse_ini_sections(path: anyio.Path, /) -> configparser.ConfigParser:
     return parser
 
 
-async def _parse_pyproject_tool(path: anyio.Path, /) -> TypeCheckerConfig | None:
+async def _parse_pyproject_tool(path: anyio.Path, /) -> TypeCheckerConfigDict | None:
     """Return the `[tool]` table from a `pyproject.toml`, or *None*."""
     parsed = tomllib.loads(await path.read_text())
     tool = parsed.get("tool")
@@ -66,7 +66,7 @@ class TypecheckerConfig(abc.ABC):
         """
         return ()
 
-    async def find(self, project_dir: StrPath, /) -> TypeCheckerConfig | None:
+    async def find(self, project_dir: StrPath, /) -> TypeCheckerConfigDict | None:
         """Discover and return the typechecker config, or *None*."""
         path = anyio.Path(project_dir)
 
@@ -137,9 +137,9 @@ class MypyConfig(TypecheckerConfig):
         if not parser.has_section("mypy"):
             return None
 
-        config: TypeCheckerConfig = dict(parser["mypy"])
+        config: TypeCheckerConfigDict = dict(parser["mypy"])
 
-        overrides: list[TypeCheckerConfig] = []
+        overrides: list[TypeCheckerConfigDict] = []
         for section in parser.sections():
             if section.startswith("mypy-"):
                 module_pattern = section.removeprefix("mypy-")
@@ -151,7 +151,7 @@ class MypyConfig(TypecheckerConfig):
         return config
 
     @staticmethod
-    async def _parse_pyproject(path: anyio.Path, /) -> TypeCheckerConfig | None:
+    async def _parse_pyproject(path: anyio.Path, /) -> TypeCheckerConfigDict | None:
         """Parse mypy config from `[tool.mypy]`."""
         if (tool := await _parse_pyproject_tool(path)) is None:
             return None
@@ -163,7 +163,7 @@ class MypyConfig(TypecheckerConfig):
 _mypy = MypyConfig()
 
 
-async def mypy_config(project_dir: StrPath, /) -> TypeCheckerConfig | None:
+async def mypy_config(project_dir: StrPath, /) -> TypeCheckerConfigDict | None:
     """
     Returns the mypy config for the given project directory, or `None`
     if no config is found.
@@ -195,7 +195,7 @@ class PyreflyConfig(TypecheckerConfig):
         return dict(parsed) if parsed else None
 
     @staticmethod
-    async def _parse_pyproject(path: anyio.Path, /) -> TypeCheckerConfig | None:
+    async def _parse_pyproject(path: anyio.Path, /) -> TypeCheckerConfigDict | None:
         """Parse Pyrefly config from `[tool.pyrefly]`."""
         if (tool := await _parse_pyproject_tool(path)) is None:
             return None
@@ -207,7 +207,7 @@ class PyreflyConfig(TypecheckerConfig):
 _pyrefly = PyreflyConfig()
 
 
-async def pyrefly_config(project_dir: StrPath, /) -> TypeCheckerConfig | None:
+async def pyrefly_config(project_dir: StrPath, /) -> TypeCheckerConfigDict | None:
     """
     Returns the Pyrefly config for the given project directory, or `None`
     if no config is found.
@@ -253,7 +253,7 @@ class TyConfig(TypecheckerConfig):
         return dict(parsed) if parsed else None
 
     @staticmethod
-    async def _parse_pyproject(path: anyio.Path, /) -> TypeCheckerConfig | None:
+    async def _parse_pyproject(path: anyio.Path, /) -> TypeCheckerConfigDict | None:
         """Parse ty config from `[tool.ty]`."""
         if (tool := await _parse_pyproject_tool(path)) is None:
             return None
@@ -265,7 +265,7 @@ class TyConfig(TypecheckerConfig):
 _ty = TyConfig()
 
 
-async def ty_config(project_dir: StrPath, /) -> TypeCheckerConfig | None:
+async def ty_config(project_dir: StrPath, /) -> TypeCheckerConfigDict | None:
     """
     Returns the ty config for the given project directory, or `None`
     if no config is found.
@@ -288,7 +288,7 @@ class ZubanConfig(TypecheckerConfig):
         return (("pyproject.toml", self._parse_pyproject),)
 
     @staticmethod
-    async def _parse_pyproject(path: anyio.Path, /) -> TypeCheckerConfig | None:
+    async def _parse_pyproject(path: anyio.Path, /) -> TypeCheckerConfigDict | None:
         """Parse Zuban config from `[tool.zuban]`."""
         if (tool := await _parse_pyproject_tool(path)) is None:
             return None
@@ -300,7 +300,7 @@ class ZubanConfig(TypecheckerConfig):
 _zuban = ZubanConfig()
 
 
-async def zuban_config(project_dir: StrPath, /) -> TypeCheckerConfig | None:
+async def zuban_config(project_dir: StrPath, /) -> TypeCheckerConfigDict | None:
     """
     Returns the Zuban config for the given project directory, or `None`
     if no config is found.
@@ -313,13 +313,13 @@ async def zuban_config(project_dir: StrPath, /) -> TypeCheckerConfig | None:
 async def discover_configs(
     project_dir: StrPath,
     /,
-) -> dict[TypeCheckerName, TypeCheckerConfig]:
+) -> dict[TypeCheckerName, TypeCheckerConfigDict]:
     """Discover configs for all supported type-checkers.
 
     Returns a mapping from type-checker name to its configuration,
     including only those type-checkers for which a config was found.
     """
-    configs: dict[TypeCheckerName, TypeCheckerConfig] = {}
+    configs: dict[TypeCheckerName, TypeCheckerConfigDict] = {}
 
     async def _probe(name: TypeCheckerName, finder: TypecheckerConfig) -> None:
         if (cfg := await finder.find(project_dir)) is not None:
