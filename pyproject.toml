@@ -68,6 +68,7 @@ strict = true
 # pyrefly
 
 [tool.pyrefly]
+project-excludes = ["tests/fixtures/stubs_base"]
 enabled-ignores = ["pyrefly"]
 
 [tool.pyrefly.errors]

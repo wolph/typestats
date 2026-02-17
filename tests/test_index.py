@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import anyio
+import libcst as cst
 import pytest
 
 from typestats import analyze
@@ -9,11 +10,14 @@ from typestats.index import (
     _resolve_expr_name,
     _resolves_to_any,
     collect_public_symbols,
+    merge_stubs_overlay,
     sources_to_module_paths,
 )
 
 _FIXTURES: Path = Path(__file__).parent / "fixtures"
 _PROJECT: Path = _FIXTURES / "project"
+_STUBS_BASE: Path = _FIXTURES / "stubs_base"
+_STUBS_OVERLAY: Path = _FIXTURES / "stubs_overlay"
 
 
 @pytest.mark.parametrize(
@@ -478,3 +482,166 @@ def test_collect_public_symbols_object_return_no_aliases() -> None:
     overload = func.overloads[0]
     # return `-> object` should NOT be ANY (output position)
     assert overload.returns is not analyze.ANY
+
+
+# --- Stubs overlay merge ---
+
+
+class TestMergeStubsOverlay:
+    _INT = analyze.Expr(cst.parse_expression("int"))
+
+    def test_stubs_take_priority(self) -> None:
+        orig = {
+            anyio.Path("/a/pkg/__init__.py"): [
+                analyze.Symbol("pkg.x", analyze.UNKNOWN),
+            ],
+        }
+        stubs = {
+            anyio.Path("/b/pkg-stubs/__init__.pyi"): [
+                analyze.Symbol("pkg.x", self._INT),
+            ],
+        }
+        flat = {
+            s.name: s.type_
+            for v in merge_stubs_overlay(orig, stubs).values()
+            for s in v
+        }
+        assert isinstance(flat["pkg.x"], analyze.Expr)
+
+    def test_missing_from_covered_module_is_unknown(self) -> None:
+        orig = {
+            anyio.Path("/a/pkg/__init__.py"): [
+                analyze.Symbol("pkg.x", self._INT),
+                analyze.Symbol("pkg.y", self._INT),
+            ],
+        }
+        stubs = {
+            anyio.Path("/b/pkg-stubs/__init__.pyi"): [
+                analyze.Symbol("pkg.x", self._INT),
+            ],
+        }
+        flat = {
+            s.name: s.type_
+            for v in merge_stubs_overlay(orig, stubs).values()
+            for s in v
+        }
+        assert flat["pkg.y"] is analyze.UNKNOWN
+
+    def test_uncovered_module_keeps_original(self) -> None:
+        orig = {
+            anyio.Path("/a/pkg/__init__.py"): [analyze.Symbol("pkg.x", self._INT)],
+            anyio.Path("/a/pkg/utils.py"): [analyze.Symbol("pkg.utils.h", self._INT)],
+        }
+        stubs = {
+            anyio.Path("/b/pkg-stubs/__init__.pyi"): [
+                analyze.Symbol("pkg.x", self._INT),
+            ],
+        }
+        flat = {
+            s.name: s.type_
+            for v in merge_stubs_overlay(orig, stubs).values()
+            for s in v
+        }
+        assert isinstance(flat["pkg.utils.h"], analyze.Expr)
+
+    def test_stubs_only_symbol_included(self) -> None:
+        merged = merge_stubs_overlay(
+            {},
+            {
+                anyio.Path("/b/pkg-stubs/__init__.pyi"): [
+                    analyze.Symbol("pkg.d", self._INT),
+                ],
+            },
+        )
+        flat = {s.name for v in merged.values() for s in v}
+        assert "pkg.d" in flat
+
+    def test_symbol_count_invariant(self) -> None:
+        """Merged result always has at least as many symbols as original."""
+        orig = {
+            anyio.Path("/a/pkg/__init__.py"): [
+                analyze.Symbol("pkg.x", self._INT),
+                analyze.Symbol("pkg.y", self._INT),
+            ],
+        }
+        stubs = {
+            anyio.Path("/b/pkg-stubs/__init__.pyi"): [
+                analyze.Symbol("pkg.x", self._INT),
+                analyze.Symbol("pkg.extra", self._INT),
+            ],
+        }
+        merged = merge_stubs_overlay(orig, stubs)
+        n_orig = sum(len(v) for v in orig.values())
+        n_merged = sum(len(v) for v in merged.values())
+        assert n_orig <= n_merged
+
+    def test_orphan_consolidated_under_stubs_path(self) -> None:
+        """Original-only symbols in covered modules go under the stubs path."""
+        stubs_path = anyio.Path("/b/pkg-stubs/__init__.pyi")
+        orig = {
+            anyio.Path("/a/pkg/__init__.py"): [
+                analyze.Symbol("pkg.x", self._INT),
+                analyze.Symbol("pkg.orphan", self._INT),
+            ],
+        }
+        stubs = {stubs_path: [analyze.Symbol("pkg.x", self._INT)]}
+        merged = merge_stubs_overlay(orig, stubs)
+        # orphan should be under the stubs path, not the original path
+        stubs_names = {s.name for s in merged.get(stubs_path, [])}
+        assert "pkg.orphan" in stubs_names
+
+
+def _merged_stubs_types() -> dict[str, analyze.TypeForm]:
+    async def _run() -> dict[str, analyze.TypeForm]:
+        orig = await collect_public_symbols(_STUBS_BASE, trace_origins=False)
+        stubs = await collect_public_symbols(_STUBS_OVERLAY, trace_origins=False)
+        merged = merge_stubs_overlay(orig, stubs)
+        return {s.name: s.type_ for syms in merged.values() for s in syms}
+
+    return anyio.run(_run)
+
+
+def test_merge_stubs_overlay_covered_symbols_annotated() -> None:
+    """Symbols covered by stubs use the stubs type (annotated)."""
+    types = _merged_stubs_types()
+    for name in ("mypkg.func_a", "mypkg.func_b", "mypkg.__version__"):
+        assert name in types
+        assert types[name] is not analyze.UNKNOWN
+
+
+def test_merge_stubs_overlay_stubs_only_symbol() -> None:
+    """Symbols only in stubs (e.g. from __getattr__) are included."""
+    types = _merged_stubs_types()
+    assert "mypkg.dynamic_func" in types
+    assert types["mypkg.dynamic_func"] is not analyze.UNKNOWN
+
+
+def test_merge_stubs_overlay_missing_from_stubs_unknown() -> None:
+    """Original symbol not in stubs (module covered) → UNKNOWN."""
+    types = _merged_stubs_types()
+    assert "mypkg.extra_func" in types
+    assert types["mypkg.extra_func"] is analyze.UNKNOWN
+
+
+def test_merge_stubs_overlay_uncovered_module_original() -> None:
+    """Module not covered by stubs → original type preserved."""
+    types = _merged_stubs_types()
+    assert "mypkg.utils.helper" in types
+    assert types["mypkg.utils.helper"] is not analyze.UNKNOWN
+
+
+def test_merge_stubs_overlay_count_invariant() -> None:
+    """Merged symbols ≥ original symbols."""
+
+    async def _run() -> tuple[int, int]:
+        orig = await collect_public_symbols(_STUBS_BASE)
+        orig_flat = await collect_public_symbols(_STUBS_BASE, trace_origins=False)
+        stubs = await collect_public_symbols(_STUBS_OVERLAY, trace_origins=False)
+        merged = merge_stubs_overlay(orig_flat, stubs)
+        return (
+            sum(len(v) for v in orig.values()),
+            sum(len(v) for v in merged.values()),
+        )
+
+    n_orig, n_merged = anyio.run(_run)
+    assert n_orig <= n_merged

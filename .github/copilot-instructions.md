@@ -24,8 +24,11 @@ For a given PyPI project the tool runs an end-to-end pipeline:
 5. **Resolve** — compute each public module's exports, tracing re-export chains back to their
    origin definition. Symbols are attributed to the source file where they are defined, not where
    they are re-exported.
-6. **Measure** — compute coverage and other statistics.
-7. **Export** — output the results for consumption by a website or dashboard.
+6. **Merge stubs** — when a companion `-stubs` package exists, overlay its `.pyi` types onto the
+   original package per-module. Both packages are analyzed with `trace_origins=False` and merged
+   via `merge_stubs_overlay`.
+7. **Measure** — compute coverage and other statistics.
+8. **Export** — output the results for consumption by a website or dashboard.
 
 ## Architecture & Key Modules
 
@@ -35,7 +38,7 @@ For a given PyPI project the tool runs an end-to-end pipeline:
 | `_ruff.py`        | Subprocess wrapper around `ruff analyze graph`                                    |
 | `_typeshed.py`    | Typeshed-related helpers                                                          |
 | `analyze.py`      | `libcst`-based per-file symbol extraction (annotations, overloads, classes, etc.) |
-| `index.py`        | Cross-module import resolution, public API construction, origin-based attribution |
+| `index.py`        | Cross-module import resolution, public API construction, stubs overlay merge      |
 | `report.py`       | Slot-level coverage reporting (`SymbolReport` protocol, module/package reports)   |
 | `typecheckers.py` | Detection of type-checker configs and strictness flags                            |
 
@@ -64,5 +67,10 @@ For a given PyPI project the tool runs an end-to-end pipeline:
 - **`__all__` resolution** — names in `__all__` that can't be resolved are treated as `UNKNOWN`,
   matching type-checker semantics.
 - **Stub priority** — when both `.py` and `.pyi` exist, only the `.pyi` is used.
+- **Stubs overlay** — a companion `{project}-stubs` package is merged with the original package.
+  Stubs `.pyi` files take priority per-module. The public API is the union of symbols from both
+  packages. Symbols present in the original but missing from stubs (in covered modules) are
+  marked `UNKNOWN`; symbols in uncovered modules keep their original types. Both analyses use
+  `trace_origins=False` (public import names) so FQNs match directly.
 - **Private re-exports** — symbols re-exported from `_private` modules via `__all__` are followed
   correctly.
