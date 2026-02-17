@@ -1,3 +1,6 @@
+# ruff: noqa: PLC0415
+
+import asyncio
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -234,7 +237,7 @@ class PackageReport:
 
     def print(self) -> None:
         """Print a human-readable summary to stdout."""
-        for f in self.module_reports:
+        for f in sorted(self.module_reports, key=lambda r: r.path):
             typed = f.n_annotated + f.n_any
             print(  # noqa: T201
                 f"{f.path} -> {f.coverage():.1%} "
@@ -253,46 +256,93 @@ class PackageReport:
             print(f"   Type-checkers: {checkers}")  # noqa: T201
 
     @classmethod
-    async def from_path(cls, pkg: str, path: StrPath, /) -> Self:
+    async def from_path(
+        cls,
+        pkg: str,
+        path: StrPath,
+        /,
+        *,
+        stubs_path: StrPath | None = None,
+    ) -> Self:
         """Build a `PackageReport` by analysing the package at *path*.
 
-        Runs `collect_public_symbols` and `discover_configs` concurrently.
+        When *stubs_path* is given (a companion ``{pkg}-stubs`` sdist),
+        symbols from the stubs overlay take priority and any original symbol
+        whose module is covered by stubs but absent from those stubs is
+        marked ``UNKNOWN``.
+
+        Runs ``collect_public_symbols`` (and optionally the stubs collection)
+        and ``discover_configs`` concurrently.
         """
-        from typestats.index import collect_public_symbols  # noqa: PLC0415
-        from typestats.typecheckers import discover_configs  # noqa: PLC0415
 
-        symbols: Mapping[anyio.Path, _Symbols] = {}
-        configs: Mapping[TypeCheckerName, TypeCheckerConfigDict] = {}
+        from typestats.index import collect_public_symbols, merge_stubs_overlay
+        from typestats.typecheckers import discover_configs
 
-        async def _collect() -> None:
-            nonlocal symbols
-            symbols = await collect_public_symbols(path)
+        coros: list[Any] = [
+            collect_public_symbols(
+                path,
+                trace_origins=stubs_path is None,
+                package_name=pkg,
+            ),
+            discover_configs(path),
+        ]
+        if stubs_path is not None:
+            coros.append(
+                collect_public_symbols(
+                    stubs_path,
+                    trace_origins=False,
+                    package_name=pkg,
+                ),
+            )
 
-        async def _discover() -> None:
-            nonlocal configs
-            configs = await discover_configs(path)
+        results: list[Any] = await asyncio.gather(*coros)
+        symbols: Mapping[anyio.Path, _Symbols] = results[0]
+        configs: Mapping[TypeCheckerName, TypeCheckerConfigDict] = results[1]
 
-        async with anyio.create_task_group() as tg:
-            tg.start_soon(_collect)
-            tg.start_soon(_discover)
+        if stubs_path is not None:
+            symbols = merge_stubs_overlay(symbols, results[2])
+
+        stubs_p = anyio.Path(stubs_path) if stubs_path is not None else None
+
+        def _rel(src: anyio.Path) -> anyio.Path:
+            try:
+                return src.relative_to(stubs_p or path)
+            except ValueError:
+                return src.relative_to(path)
 
         files = tuple(
-            ModuleReport.from_symbols(src_path.relative_to(path), symbols)
-            for src_path, symbols in symbols.items()
+            ModuleReport.from_symbols(_rel(src_path), syms)
+            for src_path, syms in symbols.items()
         )
         return cls(pkg, files, configs)
 
 
 @mainpy.main
 async def main() -> None:
-    from typestats import _pypi  # noqa: PLC0415
-    from typestats._http import retry_client  # noqa: PLC0415
+    import re
+
+    from typestats import _pypi
+    from typestats._http import retry_client
 
     package = sys.argv[1] if len(sys.argv) > 1 else "optype"
 
     async with anyio.TemporaryDirectory() as temp_dir:
         async with retry_client() as client:
-            path, _ = await _pypi.download_sdist_latest(client, package, temp_dir)
+            if m := re.match(r"^(.+)-stubs$", package):
+                # Stubs package: download both base and stubs concurrently
+                base_name = m.group(1)
+                (base_path, _), (stubs_path, _) = await asyncio.gather(
+                    _pypi.download_sdist_latest(client, base_name, temp_dir),
+                    _pypi.download_sdist_latest(client, package, temp_dir),
+                )
+                report = await PackageReport.from_path(
+                    base_name,
+                    base_path,
+                    stubs_path=stubs_path,
+                )
+            else:
+                # Base package: analyze standalone
+                path, _ = await _pypi.download_sdist_latest(client, package, temp_dir)
+                report = await PackageReport.from_path(package, path)
 
-        report = await PackageReport.from_path(package, path)
         report.print()

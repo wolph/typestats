@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from _typeshed import StrPath
 
 
-__all__ = "collect_public_symbols", "list_sources"
+__all__ = "collect_public_symbols", "list_sources", "merge_stubs_overlay"
 
 
 _logger: Final = logging.getLogger(__name__)
@@ -40,7 +40,12 @@ _EXCLUDED_DIR_NAMES: Final[frozenset[str]] = frozenset({
 # File names to exclude from analysis.
 _EXCLUDED_FILE_NAMES: Final[frozenset[str]] = frozenset({"conftest.py"})
 # Module-level dunder names that are not real symbols for typing purposes.
-_MODULE_DUNDERS: Final[frozenset[str]] = frozenset({"__all__", "__doc__"})
+_MODULE_DUNDERS: Final[frozenset[str]] = frozenset({
+    "__all__",
+    "__dir__",
+    "__doc__",
+    "__getattr__",
+})
 # Fully qualified names that are considered equivalent to having no annotation.
 _ANY_FQNS: Final[frozenset[str]] = frozenset({
     "typing.Any",
@@ -317,12 +322,19 @@ def _is_public_module(module_path: str, /) -> bool:
 async def collect_public_symbols(  # noqa: C901, PLR0912, PLR0914, PLR0915
     project_dir: StrPath,
     /,
+    *,
+    trace_origins: bool = True,
+    package_name: str | None = None,
 ) -> Mapping[anyio.Path, Sequence[analyze.Symbol]]:
     """Collect public, fully qualified symbols from a package by source path.
 
     Symbols are attributed to their *origin* source file.  When a public module
     re-exports a symbol from a private module, the origin's fully qualified name
     (and source path) is used rather than the re-exporting module's.
+
+    When *package_name* is given, only modules whose top-level component
+    matches *package_name* are included (useful for sdists that contain
+    unrelated sub-projects).
     """
     t0 = time.perf_counter()
     sources = list(await list_sources(project_dir))
@@ -332,9 +344,18 @@ async def collect_public_symbols(  # noqa: C901, PLR0912, PLR0914, PLR0915
     sources = [s for s in sources if not (s.suffix == ".py" and f"{s}i" in pyi_set)]
 
     module_paths = sources_to_module_paths(sources)
+
+    if package_name is not None:
+        module_paths = {
+            m: ps
+            for m, ps in module_paths.items()
+            if m.split(".", 1)[0] == package_name
+        }
+
     top_level = frozenset(m.split(".", 1)[0] for m in module_paths)
 
     # Step 1: Parse all modules, build flat symbol table (fqn → (path, type))
+    # TODO(@jorenham): use anyio.to_thread to avoid blocking the event loop with
     all_local: dict[str, tuple[anyio.Path, analyze.TypeForm]] = {}
     module_data: dict[str, dict[anyio.Path, analyze.ModuleSymbols]] = {}
     module_locals: dict[str, dict[str, str]] = {}  # mod → {name: fqn}
@@ -480,9 +501,20 @@ async def collect_public_symbols(  # noqa: C901, PLR0912, PLR0914, PLR0915
         first_path = next(iter(entries))
         for name, origin in module_exports(mod).items():
             if origin in module_data:
-                continue  # skip submodule references
+                if not trace_origins:
+                    # Include submodule re-exports as EXTERNAL so they
+                    # appear in merge input and don't become orphan UNKNOWNs.
+                    public.setdefault(
+                        f"{mod}.{name}",
+                        (first_path, analyze.EXTERNAL),
+                    )
+                continue
             if origin in all_local:
-                public.setdefault(origin, all_local[origin])
+                if trace_origins:
+                    public.setdefault(origin, all_local[origin])
+                else:
+                    origin_path, type_ = all_local[origin]
+                    public.setdefault(f"{mod}.{name}", (origin_path, type_))
             else:
                 type_ = (
                     analyze.EXTERNAL
@@ -498,3 +530,53 @@ async def collect_public_symbols(  # noqa: C901, PLR0912, PLR0914, PLR0915
     elapsed = time.perf_counter() - t0
     _logger.info("collect_public_symbols: %.2fs", elapsed)
     return result
+
+
+def merge_stubs_overlay(
+    original: Mapping[anyio.Path, Sequence[analyze.Symbol]],
+    stubs: Mapping[anyio.Path, Sequence[analyze.Symbol]],
+) -> dict[anyio.Path, list[analyze.Symbol]]:
+    """Merge a stubs-only package overlay with original package symbols.
+
+    Both *original* and *stubs* must be produced by `collect_public_symbols`
+    with ``trace_origins=False`` so that symbol FQNs are public import names
+    and paths point to the public module file (not origin files).
+
+    Stubs types take priority.  Original symbols whose modules are covered by
+    stubs but that are absent from those stubs are marked ``UNKNOWN`` (matching
+    type-checker behaviour: stubs shadow the ``.py``) and are consolidated
+    under the stubs path.  Original symbols whose modules are *not* covered by
+    stubs retain their original types (the type-checker falls back to the
+    ``.py``).
+    """
+    # Flatten stubs to {fqn: (path, type)} and build module → stubs-path map
+    stubs_flat: dict[str, tuple[anyio.Path, analyze.TypeForm]] = {}
+    stubs_mod_path: dict[str, anyio.Path] = {}
+    for path, syms in stubs.items():
+        for s in syms:
+            stubs_flat.setdefault(s.name, (path, s.type_))
+            stubs_mod_path.setdefault(s.name.rsplit(".", 1)[0], path)
+
+    stubs_modules = frozenset(stubs_mod_path)
+
+    # Start with all stubs symbols
+    merged: dict[str, tuple[anyio.Path, analyze.TypeForm]] = dict(stubs_flat)
+
+    # Add original symbols not in stubs
+    for path, symbols in original.items():
+        for sym in symbols:
+            if sym.name not in merged:
+                mod = sym.name.rsplit(".", 1)[0]
+                if mod in stubs_modules:
+                    # Module covered by stubs but symbol missing → UNKNOWN,
+                    # consolidated under the stubs path for this module
+                    merged[sym.name] = (stubs_mod_path[mod], analyze.UNKNOWN)
+                else:
+                    merged[sym.name] = (path, sym.type_)
+
+    # Group by path
+    result: defaultdict[anyio.Path, list[analyze.Symbol]] = defaultdict(list)
+    for fqn, (path, type_) in merged.items():
+        result[path].append(analyze.Symbol(fqn, type_))
+
+    return dict(result)

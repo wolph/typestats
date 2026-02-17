@@ -13,8 +13,8 @@ For a given project:
 
 1. Query PyPI for the latest version
 2. Download the latest (non-yanked) sdist, and extract it
-3. TODO: If there exists a `types-{project}` or `{project}-stubs` package on PyPI, repeat steps
-   1-2 for that package, and merge the stubs into the main package source tree.
+3. When the input is a `{project}-stubs` package, also download the base `{project}` sdist so that
+   the stubs overlay can be merged with the original package (see below)
 4. Compute the import graph using `ruff analyze graph`
 5. Filter to files transitively reachable from public modules (skip tests, tools, etc.)
 6. For each reachable file, parse it using `libcst`, and extract:
@@ -26,8 +26,11 @@ For a given project:
    - overloaded functions/methods
 7. Unfold type aliases to detect `Any` annotations (direct `typing.Any` usage, local aliases like
    `type Unknown = Any`, and cross-module alias chains)
-8. TODO: Unify `.py` and `.pyi` annotations for each symbol
-9. Resolve public symbols via origin-tracing (follow re-export chains to their defining module)
+8. Resolve public symbols via origin-tracing (follow re-export chains to their defining module).
+   When merging stubs, both packages use public-name mode instead (no origin tracing) so that FQNs
+   match directly between the two packages
+9. Merge stubs overlay: when a companion `{project}-stubs` package was downloaded (step 3), stubs
+   types take priority per-module and original symbols missing from stubs are marked `UNKNOWN`
 10. Collect the type-checker configs to see which strictness flags are used and which
     type-checkers it supports (mypy, (based)pyright, pyrefly, ty, zuban)
 11. Compute various statistics:
@@ -66,12 +69,16 @@ Per-module (via `libcst`):
 - **Type-ignore comments**: `# type: ignore[...]`, `# pyrefly:ignore[...]`, etc.
 - **`Annotated` unwrapping**: `Annotated[T, ...]` → `T`
   ([spec](https://typing.python.org/en/latest/spec/qualifiers.html#annotated))
-- **Aliased typing imports**: `import typing as t` resolved via `QualifiedNameProvider`
+- **Aliased typing imports**: `import typing as t` resolved via a lightweight import map
+  (built from `GatherImportsVisitor` results), avoiding the expensive `QualifiedNameProvider` /
+  `ScopeProvider` pipeline
 - **`Any` detection**: annotations that resolve to `typing.Any` (or `typing_extensions.Any`,
   `_typeshed.Incomplete`, `_typeshed.MaybeNone`, `_typeshed.sentinel`,
   `_typeshed.AnnotationForm`)—whether used directly, through local type aliases
   (`type Unknown = Any`), or cross-module alias chains—are marked `ANY` and tracked separately,
-  but still count as annotated for coverage purposes
+  but still count as annotated for coverage purposes. Additionally, `object` / `builtins.object`
+  annotations on function **parameters** (contravariant positions) are treated as `ANY`, since
+  `object` in input positions is semantically equivalent to `Any`
 
 Cross-module (via import graph):
 
@@ -88,6 +95,9 @@ Cross-module (via import graph):
   name rather than the re-exporting module
 - **Private module re-exports**: symbols re-exported from `_private` modules via `__all__`
 - **Wildcard re-export expansion**: `from _internal import *` resolved to concrete symbols
+- **Module dunder exclusion**: module-level dunders (`__all__`, `__doc__`, `__dir__`,
+  `__getattr__`) are excluded from the public symbol set—they are module infrastructure, not
+  importable symbols
 - **External vs unknown**: imported symbols from external packages marked `EXTERNAL`, not `UNKNOWN`,
   and excluded from coverage denominator
 - **Unresolved `__all__` names**: names listed in `__all__` that cannot be resolved to any local
@@ -96,6 +106,14 @@ Cross-module (via import graph):
 - **Stub file priority**: When both `.py` and `.pyi` files exist for the same module, only the
   `.pyi` stub is used—matching the behavior of type-checkers
   ([spec](https://typing.python.org/en/latest/spec/distributing.html#import-resolution-ordering))
+- **Stubs overlay merge**: When analyzing a `{project}-stubs` package, its `.pyi` files take
+  priority over both `.py` and `.pyi` in the original `{project}` package, per-module. Both
+  packages are analyzed with `trace_origins=False` (public import names) so FQNs match directly.
+  The full public API is determined from *both* packages (union of symbols). Symbols in the
+  original that are absent from stubs for a module the stubs cover are marked `UNKNOWN`
+  (type-checkers can't resolve them). Symbols from modules not covered by stubs retain their
+  original types (the type-checker falls back to the `.py`). Analyzing a base package standalone
+  does *not* trigger a stubs probe—only analyzing a `-stubs` package triggers the merge.
 - **`py.typed` detection**: `YES`, `NO`, `PARTIAL`, or `STUBS` (for `-stubs` packages)
   ([spec](https://typing.python.org/en/latest/spec/distributing.html#packaging-type-information))
 

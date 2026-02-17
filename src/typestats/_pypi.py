@@ -14,7 +14,12 @@ if TYPE_CHECKING:
     from _typeshed import StrPath
 
 
-__all__ = "download_sdist", "download_sdist_latest", "fetch_project_detail"
+__all__ = (
+    "download_sdist",
+    "download_sdist_latest",
+    "fetch_project_detail",
+    "try_download_sdist_latest",
+)
 
 
 HOST: Final = URL("https://files.pythonhosted.org")
@@ -169,6 +174,30 @@ async def download_sdist_latest(
     sdist = _latest_sdist(detail)
     path = await download_sdist(client, sdist, out_dir)
     return path, sdist
+
+
+async def try_download_sdist_latest(
+    client: httpx.AsyncClient,
+    project_name: str,
+    out_dir: StrPath,
+    /,
+) -> tuple[anyio.Path, FileDetail] | None:
+    """
+    Like `download_sdist_latest`, but returns ``None`` when the package
+    does not exist on PyPI (HTTP 4xx).
+
+    Raises
+        httpx.HTTPStatusError: for HTTP 5xx and other unexpected errors.
+    """
+    import httpx as _httpx  # noqa: PLC0415
+
+    try:
+        return await download_sdist_latest(client, project_name, out_dir)
+    except _httpx.HTTPStatusError as exc:
+        if exc.response.status_code < 500:  # noqa: PLR2004
+            _logger.debug("Package %s not found on PyPI", project_name)
+            return None
+        raise
 
 
 @mainpy.main
