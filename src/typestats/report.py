@@ -4,17 +4,16 @@ import asyncio
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, NamedTuple, Protocol, Self
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, Protocol, Self, cast
 
 if TYPE_CHECKING:
     from _typeshed import StrPath
-
-    from typestats.typecheckers import TypeCheckerConfigDict, TypeCheckerName
 
 import anyio
 import mainpy
 
 from typestats import analyze
+from typestats.typecheckers import TypeCheckerConfigDict, TypeCheckerName
 
 __all__ = "ClassReport", "FunctionReport", "ModuleReport", "NameReport", "PackageReport"
 
@@ -70,8 +69,7 @@ class NameReport:
 
     @property
     def n_annotatable(self) -> _Max1:
-        # pyrefly: ignore[bad-return]
-        return self.n_annotated + self.n_any + self.n_unannotated
+        return cast("_Max1", self.n_annotated + self.n_any + self.n_unannotated)
 
     @classmethod
     def from_symbol(cls, name: str, ty: analyze.TypeForm, /) -> Self:
@@ -210,7 +208,7 @@ class PackageReport:
     package: str
     module_reports: tuple[ModuleReport, ...]
     typecheckers: Mapping[TypeCheckerName, TypeCheckerConfigDict] = field(
-        default_factory=dict,
+        default_factory=dict[TypeCheckerName, TypeCheckerConfigDict],
     )
 
     @property

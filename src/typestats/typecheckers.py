@@ -4,7 +4,7 @@ import json
 import os
 import tomllib
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, override
+from typing import TYPE_CHECKING, Any, Literal, TypeIs, override
 
 import anyio
 
@@ -30,6 +30,10 @@ type TypeCheckerConfigDict = dict[str, Incomplete]
 type TypeCheckerName = Literal["mypy", "pyright", "pyrefly", "ty", "zuban"]
 
 
+def _is_json_dict(obj: object, /) -> TypeIs[dict[str, Any]]:
+    return isinstance(obj, dict)
+
+
 async def _parse_ini_sections(path: anyio.Path, /) -> configparser.ConfigParser:
     """Read and parse an INI-style config file."""
     parser = configparser.ConfigParser()
@@ -41,7 +45,7 @@ async def _parse_pyproject_tool(path: anyio.Path, /) -> TypeCheckerConfigDict | 
     """Return the `[tool]` table from a `pyproject.toml`, or *None*."""
     parsed = tomllib.loads(await path.read_text())
     tool = parsed.get("tool")
-    return tool if isinstance(tool, dict) else None
+    return tool if _is_json_dict(tool) else None
 
 
 class TypecheckerConfig(abc.ABC):
@@ -157,9 +161,9 @@ class MypyConfig(TypecheckerConfig):
         """Parse mypy config from `[tool.mypy]`."""
         if (tool := await _parse_pyproject_tool(path)) is None:
             return None
-        if not isinstance(mypy := tool.get("mypy"), dict):
+        if not _is_json_dict(mypy := tool.get("mypy")):
             return None
-        return dict(mypy)
+        return mypy
 
 
 _mypy = MypyConfig()
@@ -195,14 +199,14 @@ class PyrightConfig(TypecheckerConfig):
         """Parse a ``pyrightconfig.json`` file."""
         text = await path.read_text()
         parsed = json.loads(text)
-        return dict(parsed) if isinstance(parsed, dict) else None
+        return parsed if _is_json_dict(parsed) else None
 
     @staticmethod
     async def _parse_pyproject(path: anyio.Path, /) -> dict[str, Incomplete] | None:
         """Parse Pyright config from ``[tool.pyright]``."""
         if (tool := await _parse_pyproject_tool(path)) is None:
             return None
-        if not isinstance(pyright := tool.get("pyright"), dict):
+        if not _is_json_dict(pyright := tool.get("pyright")):
             return None
         return dict(pyright)
 
@@ -246,9 +250,9 @@ class PyreflyConfig(TypecheckerConfig):
         """Parse Pyrefly config from `[tool.pyrefly]`."""
         if (tool := await _parse_pyproject_tool(path)) is None:
             return None
-        if not isinstance(pyrefly := tool.get("pyrefly"), dict):
+        if not _is_json_dict(pyrefly := tool.get("pyrefly")):
             return None
-        return dict(pyrefly)
+        return pyrefly
 
 
 _pyrefly = PyreflyConfig()
@@ -296,17 +300,16 @@ class TyConfig(TypecheckerConfig):
     @staticmethod
     async def _parse_toml(path: anyio.Path, /) -> dict[str, Incomplete] | None:
         """Parse a `ty.toml` file."""
-        parsed = tomllib.loads(await path.read_text())
-        return dict(parsed) if parsed else None
+        return tomllib.loads(await path.read_text()) or None
 
     @staticmethod
     async def _parse_pyproject(path: anyio.Path, /) -> TypeCheckerConfigDict | None:
         """Parse ty config from `[tool.ty]`."""
         if (tool := await _parse_pyproject_tool(path)) is None:
             return None
-        if not isinstance(ty := tool.get("ty"), dict):
+        if not _is_json_dict(ty := tool.get("ty")):
             return None
-        return dict(ty)
+        return ty
 
 
 _ty = TyConfig()
@@ -339,9 +342,9 @@ class ZubanConfig(TypecheckerConfig):
         """Parse Zuban config from `[tool.zuban]`."""
         if (tool := await _parse_pyproject_tool(path)) is None:
             return None
-        if not isinstance(zuban := tool.get("zuban"), dict):
+        if not _is_json_dict(zuban := tool.get("zuban")):
             return None
-        return dict(zuban)
+        return zuban
 
 
 _zuban = ZubanConfig()
