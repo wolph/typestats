@@ -25,7 +25,7 @@ dependencies = [
   "anyio>=4.12.1,<5", # like asyncio but with a decent API (asyncio is a mess)
   "uvloop>=0.22.1,<1; sys_platform != 'win32'",
   "httpx[http2]>=0.28.1,<1", # like requests but modern and with async support
-  "httpx-retries>=0.4.5,<1",
+  "httpx-retries>=0.4.6",
   "packaging>=26.0",
   "libcst>=1.8.6,<2", # like ast but preservers comments/formatting and other goodies
   "ruff>=0.15.1",
@@ -42,7 +42,7 @@ test = [
 dev = [
   { include-group = "test" },
   "dprint-py>=0.51.1.0",
-  "pyrefly>=0.52.0",
+  "pyrefly>=0.53.0",
 ]
 
 [tool.uv.sources]
