@@ -28,6 +28,7 @@ dependencies = [
   "httpx-retries>=0.4.5,<1",
   "packaging>=26.0",
   "libcst>=1.8.6,<2", # like ast but preservers comments/formatting and other goodies
+  "ruff>=0.15.1",
 ]
 
 [project.scripts]
@@ -42,7 +43,6 @@ dev = [
   { include-group = "test" },
   "dprint-py>=0.51.1.0",
   "pyrefly>=0.52.0",
-  "ruff>=0.15.1",
 ]
 
 [tool.uv.sources]

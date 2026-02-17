@@ -315,6 +315,7 @@ dependencies = [
     { name = "libcst" },
     { name = "mainpy" },
     { name = "packaging" },
+    { name = "ruff" },
     { name = "uvloop", marker = "sys_platform != 'win32'" },
 ]
 
@@ -323,7 +324,6 @@ dev = [
     { name = "dprint-py" },
     { name = "pyrefly" },
     { name = "pytest" },
-    { name = "ruff" },
     { name = "test-project" },
 ]
 test = [
@@ -339,6 +339,7 @@ requires-dist = [
     { name = "libcst", specifier = ">=1.8.6,<2" },
     { name = "mainpy", specifier = ">=1.5,<2" },
     { name = "packaging", specifier = ">=26.0" },
+    { name = "ruff", specifier = ">=0.15.1" },
     { name = "uvloop", marker = "sys_platform != 'win32'", specifier = ">=0.22.1,<1" },
 ]
 
@@ -347,7 +348,6 @@ dev = [
     { name = "dprint-py", specifier = ">=0.51.1.0" },
     { name = "pyrefly", specifier = ">=0.52.0" },
     { name = "pytest", specifier = ">=9.0.2" },
-    { name = "ruff", specifier = ">=0.15.1" },
     { name = "test-project", editable = "tests/fixtures/project" },
 ]
 test = [
