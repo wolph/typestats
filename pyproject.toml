@@ -26,7 +26,6 @@ dependencies = [
   "uvloop>=0.22.1,<1; sys_platform != 'win32'",
   "httpx[http2]>=0.28.1,<1", # like requests but modern and with async support
   "httpx-retries>=0.4.5,<1",
-  "yarl>=1.22.0,<2", # like pathlib but for URLs
   "packaging>=26.0",
   "libcst>=1.8.6,<2", # like ast but preservers comments/formatting and other goodies
 ]
