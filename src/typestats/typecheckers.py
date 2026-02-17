@@ -300,7 +300,7 @@ class TyConfig(TypecheckerConfig):
     @staticmethod
     async def _parse_toml(path: anyio.Path, /) -> dict[str, Incomplete] | None:
         """Parse a `ty.toml` file."""
-        return tomllib.loads(await path.read_text())
+        return tomllib.loads(await path.read_text()) or None
 
     @staticmethod
     async def _parse_pyproject(path: anyio.Path, /) -> TypeCheckerConfigDict | None:
