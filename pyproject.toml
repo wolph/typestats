@@ -79,7 +79,7 @@ unused-ignore = "error"
 # (based)pyright
 
 [tool.pyright]
-ignore = [".venv"]
+ignore = [".venv", "tests/fixtures/**"]
 stubPath = "."
 pythonPlatform = "All"
 typeCheckingMode = "strict"
@@ -90,6 +90,7 @@ reportImplicitOverride = true
 reportImportCycles = true
 reportUnnecessaryComparison = false
 reportUnnecessaryTypeIgnoreComment = true
+reportPrivateUsage = false
 
 # ruff
 

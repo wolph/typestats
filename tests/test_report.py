@@ -29,6 +29,9 @@ from typestats.report import (
 _INT = Expr(cst.parse_expression("int"))
 _PARAM = ParamKind.POSITIONAL_OR_KEYWORD
 
+# necessary because `pytest.approx` is not (fully) annotated
+# pyright: reportUnknownMemberType=false
+
 
 class TestSlotState:
     def test_expr(self) -> None:

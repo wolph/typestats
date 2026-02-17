@@ -773,7 +773,6 @@ class _ExportsVisitor(GatherExportsVisitor, cst.BatchableCSTVisitor):
             # Detect __all__ += X.__all__ pattern
             if (
                 isinstance(value := node.value, cst.Attribute)
-                and isinstance(value.attr, cst.Name)
                 and value.attr.value == "__all__"
                 and (source_name := get_full_name_for_node(value.value))
             ):
