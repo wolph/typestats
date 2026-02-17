@@ -2,7 +2,13 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from typestats.typecheckers import mypy_config, pyrefly_config, ty_config, zuban_config
+from typestats.typecheckers import (
+    discover_configs,
+    mypy_config,
+    pyrefly_config,
+    ty_config,
+    zuban_config,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -477,3 +483,30 @@ class TestZubanConfig:
         config = await zuban_config(child)
         assert config is not None
         assert config["strict"] is True
+
+
+class TestDiscoverConfigs:
+    async def test_empty(self, tmp_path: Path) -> None:
+        result = await discover_configs(tmp_path)
+        assert result == {}
+
+    async def test_single_typechecker(self, tmp_path: Path) -> None:
+        (tmp_path / "mypy.ini").write_text("[mypy]\nstrict = True\n")
+        result = await discover_configs(tmp_path)
+        assert set(result) == {"mypy"}
+        assert result["mypy"]["strict"] == "True"
+
+    async def test_multiple_typecheckers(self, tmp_path: Path) -> None:
+        (tmp_path / "mypy.ini").write_text("[mypy]\nstrict = True\n")
+        (tmp_path / "pyproject.toml").write_text(
+            "[tool.pyrefly]\npython-version = '3.14'\n\n[tool.zuban]\nstrict = true\n",
+        )
+        (tmp_path / "ty.toml").write_text('python-version = "3.14"\n')
+        result = await discover_configs(tmp_path)
+        assert set(result) == {"mypy", "pyrefly", "ty", "zuban"}
+
+    async def test_returns_only_found(self, tmp_path: Path) -> None:
+        (tmp_path / "ty.toml").write_text('python-version = "3.14"\n')
+        result = await discover_configs(tmp_path)
+        assert set(result) == {"ty"}
+        assert "mypy" not in result
