@@ -6,12 +6,11 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, TypedDict
 
 import anyio
 import anyio.to_thread
+import httpx
 import mainpy
 from packaging.utils import parse_sdist_filename
-from yarl import URL
 
 if TYPE_CHECKING:
-    import httpx
     from _typeshed import StrPath
 
 
@@ -24,8 +23,8 @@ __all__ = (
 )
 
 
-HOST: Final = URL("https://files.pythonhosted.org")
-TOP_30D: Final = URL(
+HOST: Final = httpx.URL("https://files.pythonhosted.org")
+TOP_30D: Final = httpx.URL(
     "https://hugovk.github.io/top-pypi-packages/top-pypi-packages-30-days.csv",
 )
 
@@ -97,19 +96,19 @@ class TopPackage(TypedDict):
 _logger = logging.getLogger(__name__)
 
 
-async def _get_json(client: httpx.AsyncClient, url: URL, /, **kwargs: Any) -> Any:
-    response = await client.get(str(url), **kwargs)
+async def _get_json(client: httpx.AsyncClient, url: httpx.URL, /, **kwargs: Any) -> Any:
+    response = await client.get(url, **kwargs)
     response.raise_for_status()
     return response.json()
 
 
 async def _get_csv(
     client: httpx.AsyncClient,
-    url: URL,
+    url: httpx.URL,
     /,
     **kwargs: Any,
 ) -> list[dict[str, str]]:
-    response = await client.get(str(url), **kwargs)
+    response = await client.get(url, **kwargs)
     response.raise_for_status()
     return list(csv.DictReader(io.StringIO(response.text)))
 
@@ -126,7 +125,7 @@ async def fetch_project_detail(
     - https://peps.python.org/pep-0691/
     - https://docs.pypi.org/api/index-api/#json_1
     """
-    url = HOST / "simple" / project_name / ""
+    url = HOST.join(f"/simple/{project_name}/")
 
     data = await _get_json(client, url, headers=HEADERS_SIMPLE_API)
     return ProjectDetail(data)
