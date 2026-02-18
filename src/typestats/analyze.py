@@ -1,4 +1,6 @@
+import logging
 import re
+import sys
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from enum import StrEnum
@@ -10,6 +12,7 @@ from libcst.helpers import (
     get_absolute_module_from_package_for_import,
     get_full_name_for_node,
 )
+from packaging.version import Version
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Collection
@@ -51,6 +54,183 @@ _SPECIAL_TYPEFORMS: Final = frozenset({
 _ALL: Final = "__all__"
 
 type TypeForm = _TypeMarker | Expr | Function | Property | Class
+
+
+def _parse_version_tuple(node: cst.BaseExpression) -> Version | None:
+    """Extract a version like ``(3, 11)`` from a CST tuple literal."""
+    if not isinstance(node, cst.Tuple):
+        return None
+    parts: list[str] = []
+    for element in node.elements:
+        match element:
+            case cst.Element(value=cst.Integer(value=v)):
+                parts.append(v)
+            case _:
+                return None
+    return Version(".".join(parts))
+
+
+class _VersionGuardTransformer(cst.CSTTransformer):
+    """Remove version-guarded branches that don't match the target Python version.
+
+    Gathers imports during traversal (via ``visit_Import`` /
+    ``visit_ImportFrom``) so it can resolve ``sys.version_info`` references
+    without a separate imports pass or the expensive
+    ``QualifiedNameProvider`` / ``ScopeProvider`` pipeline.
+    Only ``>=`` and ``<`` comparisons are supported (the only operators recommended
+    by the typing spec and enforced by ruff).
+    """
+
+    _imports: dict[str, str]
+    _package_name: str
+    _elif_ids: set[cst.If]
+    _guard_results: dict[cst.If, bool]
+
+    def __init__(self, package_name: str = "") -> None:
+        super().__init__()
+        self._imports = {}
+        self._package_name = package_name
+        self._elif_ids = set()
+        self._guard_results = {}
+
+    @override
+    def visit_Import(self, node: cst.Import) -> bool:
+        if isinstance(node.names, cst.ImportStar):
+            return False
+        for alias in node.names:
+            name = get_full_name_for_node(alias.name)
+            if name is None:
+                continue
+            if alias.asname and isinstance(alias.asname.name, cst.Name):
+                self._imports[alias.asname.name.value] = name
+            else:
+                # `import a.b.c` binds the top-level name `a`
+                self._imports[name.split(".", 1)[0]] = name.split(".", 1)[0]
+        return False
+
+    @override
+    def visit_ImportFrom(self, node: cst.ImportFrom) -> bool:
+        if isinstance(node.names, cst.ImportStar):
+            return False
+        module = get_absolute_module_from_package_for_import(
+            self._package_name or None,
+            node,
+        )
+        if module is None:
+            return False
+        for alias in node.names:
+            obj_name = alias.name.value if isinstance(alias.name, cst.Name) else None
+            if obj_name is None:
+                continue
+            fqn = f"{module}.{obj_name}"
+            if alias.asname and isinstance(alias.asname.name, cst.Name):
+                self._imports[alias.asname.name.value] = fqn
+            else:
+                self._imports[obj_name] = fqn
+        return False
+
+    def _resolve_name(self, node: cst.CSTNode) -> str | None:
+        """Resolve a CST node to its fully qualified name using the import map."""
+        if (raw := get_full_name_for_node(node)) is None:
+            return None
+
+        first, _, rest = raw.partition(".")
+        if fqn := self._imports.get(first):
+            return f"{fqn}.{rest}" if rest else fqn
+        return raw
+
+    def _is_version_info(self, node: cst.BaseExpression) -> bool:
+        """Check if *node* represents ``sys.version_info``."""
+        if isinstance(node, cst.Subscript):
+            if self._resolve_name(node.value) == "sys.version_info":
+                _log.warning("subscripted sys.version_info is not supported")
+            return False
+        return self._resolve_name(node) == "sys.version_info"
+
+    def _eval_version_guard(self, test: cst.BaseExpression) -> bool | None:
+        """Evaluate a ``sys.version_info`` comparison against the target version.
+
+        Only ``>=`` and ``<`` are supported.  Returns ``True``/``False`` when the
+        comparison can be resolved, ``None`` otherwise.
+        """
+        if not isinstance(test, cst.Comparison) or len(test.comparisons) != 1:
+            return None
+
+        cmp = test.comparisons[0]
+        if not self._is_version_info(test.left):
+            return None
+
+        version = _parse_version_tuple(cmp.comparator)
+        if version is None:
+            return None
+
+        match cmp.operator:
+            case cst.GreaterThanEqual():
+                return _TARGET_VERSION >= version  # noqa: SIM300
+            case cst.LessThan():
+                return _TARGET_VERSION < version  # noqa: SIM300
+            case _:
+                _log.warning(
+                    "unsupported version_info operator: %s",
+                    type(cmp.operator).__name__,
+                )
+                return None
+
+    @override
+    def visit_If(self, node: cst.If) -> bool:
+        if isinstance(node.orelse, cst.If):
+            self._elif_ids.add(node.orelse)
+        # Evaluate now while we have original nodes (metadata is keyed to them).
+        result = self._eval_version_guard(node.test)
+        if result is not None:
+            self._guard_results[node] = result
+        return True
+
+    @override
+    def leave_If(
+        self,
+        original_node: cst.If,
+        updated_node: cst.If,
+    ) -> cst.If | cst.FlattenSentinel[cst.BaseStatement] | cst.RemovalSentinel:
+        if original_node in self._elif_ids:
+            self._elif_ids.discard(original_node)
+            return updated_node
+
+        return self._resolve_chain(original_node, updated_node)
+
+    @staticmethod
+    def _flatten_body(
+        body: cst.BaseSuite,
+    ) -> cst.FlattenSentinel[cst.BaseStatement]:
+        if isinstance(body, cst.IndentedBlock):
+            return cst.FlattenSentinel(body.body)
+
+        # SimpleStatementSuite (e.g. ``if ...: pass``)
+        assert isinstance(body, cst.SimpleStatementSuite)
+        line = cst.SimpleStatementLine(body.body)
+        return cst.FlattenSentinel([line])
+
+    def _resolve_chain(
+        self,
+        original: cst.If,
+        updated: cst.If,
+    ) -> cst.If | cst.FlattenSentinel[cst.BaseStatement] | cst.RemovalSentinel:
+        result = self._guard_results.get(original)
+        if result is None:
+            return updated
+
+        if result:
+            return self._flatten_body(updated.body)
+
+        if updated.orelse is None:
+            return cst.RemovalSentinel.REMOVE
+
+        if isinstance(updated.orelse, cst.Else):
+            return self._flatten_body(updated.orelse.body)
+
+        # elif chain: recurse into the next branch.
+        assert isinstance(original.orelse, cst.If)
+        return self._resolve_chain(original.orelse, updated.orelse)
 
 
 class ParamKind(StrEnum):
@@ -1084,6 +1264,12 @@ def collect_symbols(
         return _EMPTY_SYMBOLS
 
     module = cst.parse_module(source)
+
+    # Pass 1: Remove version-guarded branches.
+    # The transformer gathers imports during traversal for name resolution.
+    module = module.visit(_VersionGuardTransformer(package_name or ""))
+
+    # Pass 2: Collect symbols, imports, exports, and comments.
     visitor = _SymbolVisitor(package_name=package_name or "")
     module.visit(visitor)  # type: ignore[arg-type]  # CSTVisitor is accepted at runtime
 
