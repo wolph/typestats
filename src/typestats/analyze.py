@@ -38,6 +38,7 @@ _ENUM_BASES: Final[frozenset[str]] = frozenset({
 })
 _KNOWN_ATTRS_BASES: Final[frozenset[str]] = frozenset({"NamedTuple", "TypedDict"})
 _DATACLASS_DECORATORS: Final[frozenset[str]] = frozenset({"dataclass"})
+_TYPE_CHECK_ONLY: Final[frozenset[str]] = frozenset({"type_check_only"})
 _SPECIAL_TYPEFORMS: Final[frozenset[str]] = frozenset({
     "namedtuple",
     "NewType",
@@ -288,6 +289,7 @@ class ModuleSymbols:
     symbols: tuple[Symbol, ...]
     type_aliases: tuple[TypeAlias, ...]
     ignore_comments: tuple[IgnoreComment, ...]
+    type_check_only: frozenset[str]  # @type_check_only decorated names
 
 
 def _extract_names(expr: cst.BaseExpression) -> list[cst.Name]:
@@ -367,6 +369,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
     symbols: Final[list[Symbol]]
     type_aliases: Final[list[TypeAlias]]
     import_aliases: Final[list[tuple[str, str]]]
+    type_check_only_names: Final[set[str]]
 
     _imports: Final[dict[str, str]]
     _defined_names: Final[set[str]]
@@ -380,6 +383,7 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         self.symbols = []
         self.type_aliases = []
         self.import_aliases = []
+        self.type_check_only_names = set()
         self._imports = dict(imports)
         self._defined_names = set()
         self._class_stack = deque()
@@ -511,6 +515,15 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
             Expr.from_annotation(node.returns, self._resolve_name),
         )
 
+    def _has_type_check_only(self, node: cst.ClassDef | cst.FunctionDef) -> bool:
+        for dec in node.decorators:
+            expr = dec.decorator
+            if isinstance(expr, cst.Call):
+                expr = expr.func
+            if self._is_name_in(expr, _TYPE_CHECK_ONLY):
+                return True
+        return False
+
     @override
     def visit_ClassDef(self, node: cst.ClassDef) -> bool:
         if self._function_depth:
@@ -519,6 +532,8 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         name = node.name.value
         if not self._class_stack:
             self._defined_names.add(name)
+            if self._has_type_check_only(node):
+                self.type_check_only_names.add(name)
         symbol_index = len(self.symbols)
         self.symbols.append(Symbol(name, Class(name)))
         self._class_stack.append(
@@ -547,6 +562,8 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         if self._function_depth == 0:
             if not self._class_stack:
                 self._defined_names.add(node.name.value)
+                if self._has_type_check_only(node):
+                    self.type_check_only_names.add(node.name.value)
             decorators = {
                 _leaf_name(full)
                 for dec in node.decorators
@@ -891,6 +908,7 @@ def collect_symbols(
         exports_explicit_dynamic=tuple(exports_visitor.all_sources),
         exports_implicit=reexports,
         ignore_comments=tuple(type_ignore_visitor.comments),
+        type_check_only=frozenset(symbol_visitor.type_check_only_names),
     )
 
 

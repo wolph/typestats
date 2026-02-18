@@ -1042,3 +1042,77 @@ class TestAnnotationCounts:
     def test_class_with_any_member(self) -> None:
         cls = Class("Foo", members=(ANY,))
         assert annotation_counts(cls) == (1, 1)
+
+
+class TestTypeCheckOnly:
+    def test_function_detected(self) -> None:
+        src = textwrap.dedent("""
+        from typing import type_check_only
+
+        @type_check_only
+        def _secret() -> None: ...
+        """)
+        module = collect_symbols(src)
+        assert module.type_check_only == {"_secret"}
+
+    def test_class_detected(self) -> None:
+        src = textwrap.dedent("""
+        from typing import type_check_only
+
+        @type_check_only
+        class _Proto:
+            x: int
+        """)
+        module = collect_symbols(src)
+        assert module.type_check_only == {"_Proto"}
+
+    def test_typing_extensions_detected(self) -> None:
+        src = textwrap.dedent("""
+        from typing_extensions import type_check_only
+
+        @type_check_only
+        class _Proto:
+            x: int
+        """)
+        module = collect_symbols(src)
+        assert module.type_check_only == {"_Proto"}
+
+    def test_no_decorator(self) -> None:
+        src = textwrap.dedent("""
+        class Normal:
+            x: int
+
+        def func() -> None: ...
+        """)
+        module = collect_symbols(src)
+        assert module.type_check_only == frozenset()
+
+    def test_nested_class_not_tracked(self) -> None:
+        """Only module-level @type_check_only is tracked."""
+        src = textwrap.dedent("""
+        from typing import type_check_only
+
+        class Outer:
+            @type_check_only
+            class _Inner:
+                x: int
+        """)
+        module = collect_symbols(src)
+        # Nested classes are not tracked at module level
+        assert module.type_check_only == frozenset()
+
+    def test_multiple(self) -> None:
+        src = textwrap.dedent("""
+        from typing import type_check_only
+
+        @type_check_only
+        def _f() -> None: ...
+
+        @type_check_only
+        class _P:
+            x: int
+
+        def public() -> None: ...
+        """)
+        module = collect_symbols(src)
+        assert module.type_check_only == {"_f", "_P"}
