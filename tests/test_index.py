@@ -1,3 +1,4 @@
+import functools
 from pathlib import Path
 
 import anyio
@@ -58,6 +59,7 @@ def test_is_excluded_path(path: str, prefix: str, expected: bool) -> None:
     assert _is_excluded_path(path, prefix=prefix) == expected
 
 
+@functools.cache
 def _public_symbol_names(project_dir: Path) -> set[str]:
     """Collect all public symbol names from a fixture project."""
 
@@ -212,6 +214,7 @@ def test_collect_public_symbols_pyi_relative_imports() -> None:
     assert "mylib_pyi.do_add" not in names
 
 
+@functools.cache
 def _public_symbol_types(project_dir: Path) -> dict[str, analyze.TypeForm]:
     """Collect public symbol names mapped to their resolved types."""
 
@@ -277,73 +280,69 @@ def test_collect_public_symbols_same_name_module_not_unknown() -> None:
 
 
 class TestResolveExprName:
-    def test_direct_import(self) -> None:
-        assert _resolve_expr_name("Any", {"Any": "typing.Any"}, "mod") == "typing.Any"
-
-    def test_dotted_import(self) -> None:
-        assert (
-            _resolve_expr_name("typing.Any", {"typing": "typing"}, "mod")
-            == "typing.Any"
-        )
-
-    def test_aliased_import(self) -> None:
-        assert _resolve_expr_name("t.Any", {"t": "typing"}, "mod") == "typing.Any"
-
-    def test_local_fallback(self) -> None:
-        assert _resolve_expr_name("Unknown", {}, "mymod") == "mymod.Unknown"
+    @pytest.mark.parametrize(
+        ("name", "imports", "module", "expected"),
+        [
+            ("Any", {"Any": "typing.Any"}, "mod", "typing.Any"),
+            ("typing.Any", {"typing": "typing"}, "mod", "typing.Any"),
+            ("t.Any", {"t": "typing"}, "mod", "typing.Any"),
+            ("Unknown", {}, "mymod", "mymod.Unknown"),
+        ],
+        ids=["direct_import", "dotted_import", "aliased_import", "local_fallback"],
+    )
+    def test_resolve(
+        self,
+        name: str,
+        imports: dict[str, str],
+        module: str,
+        expected: str,
+    ) -> None:
+        assert _resolve_expr_name(name, imports, module) == expected
 
 
 class TestResolvesToAny:
-    def test_typing_any(self) -> None:
-        assert _resolves_to_any("typing.Any", {})
-
-    def test_typing_extensions_any(self) -> None:
-        assert _resolves_to_any("typing_extensions.Any", {})
-
-    def test_not_any(self) -> None:
-        assert not _resolves_to_any("builtins.int", {})
-
-    def test_alias_chain(self) -> None:
-        aliases = {
-            "mod.Unknown": "typing.Any",
-        }
-        assert _resolves_to_any("mod.Unknown", aliases)
-
-    def test_chained_aliases(self) -> None:
-        aliases = {
-            "mod.Chained": "mod.Unknown",
-            "mod.Unknown": "typing.Any",
-        }
-        assert _resolves_to_any("mod.Chained", aliases)
-
-    def test_circular_alias_not_any(self) -> None:
-        aliases = {
-            "mod.A": "mod.B",
-            "mod.B": "mod.A",
-        }
-        assert not _resolves_to_any("mod.A", aliases)
-
-    def test_alias_to_non_any(self) -> None:
-        aliases = {
-            "mod.MyInt": "builtins.int",
-        }
-        assert not _resolves_to_any("mod.MyInt", aliases)
-
-    def test_typeshed_incomplete(self) -> None:
-        assert _resolves_to_any("_typeshed.Incomplete", {})
-
-    def test_typeshed_maybe_none(self) -> None:
-        assert _resolves_to_any("_typeshed.MaybeNone", {})
-
-    def test_typeshed_sentinel(self) -> None:
-        assert _resolves_to_any("_typeshed.sentinel", {})
-
-    def test_typeshed_annotation_form(self) -> None:
-        assert _resolves_to_any("_typeshed.AnnotationForm", {})
-
-    def test_alias_to_typeshed_incomplete(self) -> None:
-        aliases = {"mod.X": "_typeshed.Incomplete"}
-        assert _resolves_to_any("mod.X", aliases)
+    @pytest.mark.parametrize(
+        ("name", "aliases", "expected"),
+        [
+            ("typing.Any", {}, True),
+            ("typing_extensions.Any", {}, True),
+            ("builtins.int", {}, False),
+            ("mod.Unknown", {"mod.Unknown": "typing.Any"}, True),
+            (
+                "mod.Chained",
+                {"mod.Chained": "mod.Unknown", "mod.Unknown": "typing.Any"},
+                True,
+            ),
+            ("mod.A", {"mod.A": "mod.B", "mod.B": "mod.A"}, False),
+            ("mod.MyInt", {"mod.MyInt": "builtins.int"}, False),
+            ("_typeshed.Incomplete", {}, True),
+            ("_typeshed.MaybeNone", {}, True),
+            ("_typeshed.sentinel", {}, True),
+            ("_typeshed.AnnotationForm", {}, True),
+            ("mod.X", {"mod.X": "_typeshed.Incomplete"}, True),
+        ],
+        ids=[
+            "typing_any",
+            "typing_extensions_any",
+            "not_any",
+            "alias_chain",
+            "chained_aliases",
+            "circular_alias_not_any",
+            "alias_to_non_any",
+            "typeshed_incomplete",
+            "typeshed_maybe_none",
+            "typeshed_sentinel",
+            "typeshed_annotation_form",
+            "alias_to_typeshed_incomplete",
+        ],
+    )
+    def test_resolves_to_any(
+        self,
+        name: str,
+        aliases: dict[str, str],
+        expected: bool,
+    ) -> None:
+        assert _resolves_to_any(name, aliases) is expected
 
 
 def test_collect_public_symbols_direct_any_is_any() -> None:
@@ -591,6 +590,7 @@ class TestMergeStubsOverlay:
         assert "pkg.orphan" in stubs_names
 
 
+@functools.cache
 def _merged_stubs_types() -> dict[str, analyze.TypeForm]:
     async def _run() -> dict[str, analyze.TypeForm]:
         orig = await collect_public_symbols(_STUBS_BASE, trace_origins=False)

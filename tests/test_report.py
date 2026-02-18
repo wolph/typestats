@@ -33,48 +33,50 @@ _PARAM = ParamKind.POSITIONAL_OR_KEYWORD
 
 
 class TestSlotState:
-    def test_expr(self) -> None:
-        assert _SlotState.of(_INT) == (1, 0, 0)
-
-    def test_any(self) -> None:
-        assert _SlotState.of(ANY) == (0, 1, 0)
-
-    def test_unknown(self) -> None:
-        assert _SlotState.of(UNKNOWN) == (0, 0, 1)
-
-    def test_known(self) -> None:
-        assert _SlotState.of(KNOWN) == (0, 0, 0)
-
-    def test_external(self) -> None:
-        assert _SlotState.of(EXTERNAL) == (0, 0, 0)
+    @pytest.mark.parametrize(
+        ("typeform", "expected"),
+        [
+            (_INT, (1, 0, 0)),
+            (ANY, (0, 1, 0)),
+            (UNKNOWN, (0, 0, 1)),
+            (KNOWN, (0, 0, 0)),
+            (EXTERNAL, (0, 0, 0)),
+        ],
+        ids=["expr", "any", "unknown", "known", "external"],
+    )
+    def test_slot_state(
+        self,
+        typeform: TypeForm,
+        expected: tuple[int, int, int],
+    ) -> None:
+        assert _SlotState.of(typeform) == expected
 
 
 class TestNameReport:
-    def test_annotated(self) -> None:
-        r = NameReport.from_symbol("x", _INT)
-        assert r.n_annotatable == 1
-        assert r.n_annotated == 1
-        assert r.n_any == 0
-        assert r.n_unannotated == 0
-
-    def test_any(self) -> None:
-        r = NameReport.from_symbol("x", ANY)
-        assert r.n_annotatable == 1
-        assert r.n_annotated == 0
-        assert r.n_any == 1
-
-    def test_unknown(self) -> None:
-        r = NameReport.from_symbol("x", UNKNOWN)
-        assert r.n_annotatable == 1
-        assert r.n_unannotated == 1
-
-    def test_known_not_annotatable(self) -> None:
-        r = NameReport.from_symbol("x", KNOWN)
-        assert r.n_annotatable == 0
-
-    def test_external_not_annotatable(self) -> None:
-        r = NameReport.from_symbol("x", EXTERNAL)
-        assert r.n_annotatable == 0
+    @pytest.mark.parametrize(
+        ("typeform", "n_annotatable", "n_annotated", "n_any", "n_unannotated"),
+        [
+            (_INT, 1, 1, 0, 0),
+            (ANY, 1, 0, 1, 0),
+            (UNKNOWN, 1, 0, 0, 1),
+            (KNOWN, 0, 0, 0, 0),
+            (EXTERNAL, 0, 0, 0, 0),
+        ],
+        ids=["annotated", "any", "unknown", "known", "external"],
+    )
+    def test_from_symbol(
+        self,
+        typeform: TypeForm,
+        n_annotatable: int,
+        n_annotated: int,
+        n_any: int,
+        n_unannotated: int,
+    ) -> None:
+        r = NameReport.from_symbol("x", typeform)
+        assert r.n_annotatable == n_annotatable
+        assert r.n_annotated == n_annotated
+        assert r.n_any == n_any
+        assert r.n_unannotated == n_unannotated
 
 
 def _func(overload0: Overload, /, *overloads: Overload) -> Function:
