@@ -95,6 +95,7 @@ class TestFunctionReport:
         assert r.n_annotated == 3
         assert r.n_any == 0
         assert r.n_unannotated == 0
+        assert r.n_overloads == 1
 
     def test_mixed(self) -> None:
         func = _func(_overload([("a", _INT), ("b", UNKNOWN)], returns=ANY))
@@ -127,6 +128,7 @@ class TestFunctionReport:
         assert r.n_annotatable == 4  # 2 params + 2 returns
         assert r.n_annotated == 2
         assert r.n_unannotated == 2
+        assert r.n_overloads == 2
 
 
 class TestClassReport:
@@ -137,12 +139,17 @@ class TestClassReport:
         assert len(r.methods) == 1
         assert r.n_annotatable == 2  # x + return
         assert r.n_annotated == 2
+        assert r.n_functions == 0
+        assert r.n_methods == 1
+        assert r.n_method_overloads == 1
 
     def test_non_function_members_ignored(self) -> None:
         cls_ = Class("C", (KNOWN, _INT, UNKNOWN))
         r = ClassReport.from_symbol("C", cls_)
         assert len(r.methods) == 0
         assert r.n_annotatable == 0
+        assert r.n_functions == 0
+        assert r.n_methods == 0
 
     def test_aggregation(self) -> None:
         m1 = Function("a", (_overload([("x", _INT)]),))
@@ -152,6 +159,18 @@ class TestClassReport:
         assert r.n_annotatable == 4
         assert r.n_annotated == 2
         assert r.n_unannotated == 2
+
+    def test_overloaded_methods(self) -> None:
+        m1 = Function(
+            "a",
+            (_overload([("x", _INT)]), _overload([("x", UNKNOWN)])),
+        )
+        m2 = Function("b", (_overload([("y", _INT)]),))
+        cls_ = Class("C", (m1, m2))
+        r = ClassReport.from_symbol("C", cls_)
+        assert r.n_functions == 0
+        assert r.n_methods == 2
+        assert r.n_method_overloads == 3  # m1 has 2 overloads + m2 has 1
 
 
 class TestSymbolReport:
@@ -201,6 +220,55 @@ class TestModuleReport:
         assert m.n_any == 1
         assert m.n_unannotated == 1
 
+    def test_entity_counts(self) -> None:
+        func = _func(_overload([("a", _INT)]))
+        overloaded = _func(
+            _overload([("a", _INT)]),
+            _overload([("a", UNKNOWN)]),
+        )
+        cls_ = Class("C", ())
+        m = ModuleReport.from_symbols(
+            "mod.py",
+            [
+                Symbol("f", func),
+                Symbol("g", overloaded),
+                Symbol("C", cls_),
+                Symbol("x", _INT),
+                Symbol("y", UNKNOWN),
+            ],
+        )
+        assert m.n_functions == 2  # f + g (empty class has no methods)
+        assert m.n_methods == 0
+        assert m.n_function_overloads == 3  # f has 1 + g has 2
+        assert m.n_method_overloads == 0
+        assert m.n_classes == 1
+        assert m.n_names == 2
+
+    def test_entity_counts_empty(self) -> None:
+        m = ModuleReport(path="m.py", symbol_reports=())
+        assert m.n_functions == 0
+        assert m.n_methods == 0
+        assert m.n_function_overloads == 0
+        assert m.n_method_overloads == 0
+        assert m.n_classes == 0
+        assert m.n_names == 0
+
+    def test_overloads_from_class_methods(self) -> None:
+        overloaded_method = Function(
+            "m",
+            (
+                _overload([("x", _INT)]),
+                _overload([("x", UNKNOWN)]),
+                _overload([("x", ANY)]),
+            ),
+        )
+        cls_ = Class("C", (overloaded_method,))
+        m = ModuleReport.from_symbols("mod.py", [Symbol("C", cls_)])
+        assert m.n_functions == 0
+        assert m.n_methods == 1
+        assert m.n_function_overloads == 0
+        assert m.n_method_overloads == 3  # 3 overloads from the class method
+
     def test_coverage_default(self) -> None:
         """Non-strict: Any counts as annotated."""
         m = ModuleReport.from_symbols("m.py", [Symbol("a", _INT), Symbol("b", ANY)])
@@ -235,6 +303,18 @@ class TestPackageReport:
         assert r.n_annotated == 1
         assert r.n_any == 1
         assert r.n_unannotated == 1
+
+    def test_entity_counts(self) -> None:
+        func = _func(_overload([("a", _INT)]))
+        method = Function("m", (_overload([("x", _INT)]),))
+        cls_ = Class("C", (method,))
+        r = self._pkg(Symbol("f", func), Symbol("C", cls_), Symbol("x", _INT))
+        assert r.n_functions == 1  # f
+        assert r.n_methods == 1  # C.m
+        assert r.n_function_overloads == 1
+        assert r.n_method_overloads == 1
+        assert r.n_classes == 1
+        assert r.n_names == 1
 
     def test_typechecker_configs_default_empty(self) -> None:
         r = self._pkg(Symbol("a", _INT))

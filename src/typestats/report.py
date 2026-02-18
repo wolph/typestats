@@ -69,6 +69,13 @@ class NameReport(BaseModel):
     def n_annotatable(self) -> _Max1:
         return cast("_Max1", self.n_annotated + self.n_any + self.n_unannotated)
 
+    n_functions: Literal[0] = Field(0, exclude=True)
+    n_methods: Literal[0] = Field(0, exclude=True)
+    n_function_overloads: Literal[0] = Field(0, exclude=True)
+    n_method_overloads: Literal[0] = Field(0, exclude=True)
+    n_classes: Literal[0] = Field(0, exclude=True)
+    n_names: Literal[1] = Field(1, exclude=True)
+
     @classmethod
     def from_symbol(cls, name: str, ty: analyze.TypeForm, /) -> Self:
         s = _SlotState.of(ty)
@@ -90,11 +97,23 @@ class FunctionReport(BaseModel):
     n_annotated: NonNegativeInt
     n_any: NonNegativeInt
     n_unannotated: NonNegativeInt
+    n_overloads: NonNegativeInt
 
     @computed_field
     @property
     def n_annotatable(self) -> NonNegativeInt:
         return self.n_annotated + self.n_any + self.n_unannotated
+
+    n_functions: Literal[1] = Field(1, exclude=True)
+    n_methods: Literal[0] = Field(0, exclude=True)
+    n_method_overloads: Literal[0] = Field(0, exclude=True)
+    n_classes: Literal[0] = Field(0, exclude=True)
+    n_names: Literal[0] = Field(0, exclude=True)
+
+    @computed_field
+    @property
+    def n_function_overloads(self) -> NonNegativeInt:
+        return self.n_overloads
 
     @classmethod
     def from_symbol(cls, name: str, ty: analyze.Function, /) -> Self:
@@ -111,6 +130,7 @@ class FunctionReport(BaseModel):
             n_annotated=annotated,
             n_any=any_,
             n_unannotated=unannotated,
+            n_overloads=len(ty.overloads),
         )
 
 
@@ -145,6 +165,29 @@ class ClassReport(BaseModel):
     @property
     def n_unannotated(self) -> NonNegativeInt:
         return sum(m.n_unannotated for m in self.methods)
+
+    @computed_field
+    @property
+    def n_functions(self) -> Literal[0]:
+        return 0
+
+    @computed_field
+    @property
+    def n_methods(self) -> NonNegativeInt:
+        return len(self.methods)
+
+    @computed_field
+    @property
+    def n_function_overloads(self) -> Literal[0]:
+        return 0
+
+    @computed_field
+    @property
+    def n_method_overloads(self) -> NonNegativeInt:
+        return sum(m.n_overloads for m in self.methods)
+
+    n_classes: Literal[1] = Field(1, exclude=True)
+    n_names: Literal[0] = Field(0, exclude=True)
 
     @classmethod
     def from_class(cls, name: str, class_: analyze.Class) -> Self:
@@ -211,6 +254,36 @@ class ModuleReport(BaseModel):
     def n_unannotated(self) -> NonNegativeInt:
         return sum(s.n_unannotated for s in self.symbol_reports)
 
+    @computed_field
+    @property
+    def n_functions(self) -> NonNegativeInt:
+        return sum(s.n_functions for s in self.symbol_reports)
+
+    @computed_field
+    @property
+    def n_methods(self) -> NonNegativeInt:
+        return sum(s.n_methods for s in self.symbol_reports)
+
+    @computed_field
+    @property
+    def n_function_overloads(self) -> NonNegativeInt:
+        return sum(s.n_function_overloads for s in self.symbol_reports)
+
+    @computed_field
+    @property
+    def n_method_overloads(self) -> NonNegativeInt:
+        return sum(s.n_method_overloads for s in self.symbol_reports)
+
+    @computed_field
+    @property
+    def n_classes(self) -> NonNegativeInt:
+        return sum(s.n_classes for s in self.symbol_reports)
+
+    @computed_field
+    @property
+    def n_names(self) -> NonNegativeInt:
+        return sum(s.n_names for s in self.symbol_reports)
+
     def coverage(self, strict: bool = False, /) -> float:
         """
         Coverage ratio.
@@ -260,6 +333,36 @@ class PackageReport(BaseModel):
     def n_unannotated(self) -> NonNegativeInt:
         return sum(m.n_unannotated for m in self.module_reports)
 
+    @computed_field
+    @property
+    def n_functions(self) -> NonNegativeInt:
+        return sum(m.n_functions for m in self.module_reports)
+
+    @computed_field
+    @property
+    def n_methods(self) -> NonNegativeInt:
+        return sum(m.n_methods for m in self.module_reports)
+
+    @computed_field
+    @property
+    def n_function_overloads(self) -> NonNegativeInt:
+        return sum(m.n_function_overloads for m in self.module_reports)
+
+    @computed_field
+    @property
+    def n_method_overloads(self) -> NonNegativeInt:
+        return sum(m.n_method_overloads for m in self.module_reports)
+
+    @computed_field
+    @property
+    def n_classes(self) -> NonNegativeInt:
+        return sum(m.n_classes for m in self.module_reports)
+
+    @computed_field
+    @property
+    def n_names(self) -> NonNegativeInt:
+        return sum(m.n_names for m in self.module_reports)
+
     def coverage(self, strict: bool = False, /) -> float:
         """Coverage ratio. If *strict*, `Any` slots don't count."""
         total = self.n_annotatable
@@ -281,6 +384,11 @@ class PackageReport(BaseModel):
             f"=> {self.package} {self.version}: {self.coverage():.1%} "
             f"({typed}/{self.n_annotatable} annotated, "
             f"{self.n_any} Any, {self.n_unannotated} missing)",
+        )
+        print(  # noqa: T201
+            f"   {self.n_functions} functions ({self.n_function_overloads} overloads), "
+            f"{self.n_methods} methods ({self.n_method_overloads} overloads), "
+            f"{self.n_classes} classes, {self.n_names} names",
         )
         if self.typecheckers:
             checkers = ", ".join(sorted(self.typecheckers))
