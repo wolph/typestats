@@ -455,7 +455,7 @@ class PackageReport(BaseModel):
                 trace_origins=stubs_path is None,
                 package_name=pkg,
             ),
-            discover_configs(path),
+            discover_configs(stubs_path or path),
         ]
         if stubs_path is not None:
             coros.append(
