@@ -14,5 +14,10 @@ class _InternalProto:
     y: str
 
 
+@type_check_only
+class CheckerProtocol:
+    a: int
+
+
 class PublicClass:
     z: int

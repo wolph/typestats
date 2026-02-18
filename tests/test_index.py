@@ -677,6 +677,8 @@ def test_collect_public_symbols_type_check_only_excluded() -> None:
     assert "tcopkg.mod.public_func" in names
     assert "tcopkg.mod.PublicClass" in names
 
-    # _checker and _InternalProto are @type_check_only, not in __all__ → excluded
+    # @type_check_only symbols not in __all__ → excluded
     assert "tcopkg.mod._checker" not in names
     assert "tcopkg.mod._InternalProto" not in names
+    # public-named but @type_check_only, excluded by decorator (not by _is_public)
+    assert "tcopkg.mod.CheckerProtocol" not in names
