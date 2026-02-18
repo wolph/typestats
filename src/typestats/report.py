@@ -11,7 +11,14 @@ if TYPE_CHECKING:
 
 import anyio
 import mainpy
-from pydantic import BaseModel, ConfigDict, Discriminator, Field, computed_field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Discriminator,
+    Field,
+    NonNegativeInt,
+    computed_field,
+)
 
 from typestats import analyze
 from typestats.typecheckers import TypeCheckerConfigDict, TypeCheckerName
@@ -80,13 +87,13 @@ class FunctionReport(BaseModel):
 
     kind: Literal["function"] = "function"
     name: str
-    n_annotated: int
-    n_any: int
-    n_unannotated: int
+    n_annotated: NonNegativeInt
+    n_any: NonNegativeInt
+    n_unannotated: NonNegativeInt
 
     @computed_field
     @property
-    def n_annotatable(self) -> int:
+    def n_annotatable(self) -> NonNegativeInt:
         return self.n_annotated + self.n_any + self.n_unannotated
 
     @classmethod
@@ -121,22 +128,22 @@ class ClassReport(BaseModel):
 
     @computed_field
     @property
-    def n_annotatable(self) -> int:
+    def n_annotatable(self) -> NonNegativeInt:
         return sum(m.n_annotatable for m in self.methods)
 
     @computed_field
     @property
-    def n_annotated(self) -> int:
+    def n_annotated(self) -> NonNegativeInt:
         return sum(m.n_annotated for m in self.methods)
 
     @computed_field
     @property
-    def n_any(self) -> int:
+    def n_any(self) -> NonNegativeInt:
         return sum(m.n_any for m in self.methods)
 
     @computed_field
     @property
-    def n_unannotated(self) -> int:
+    def n_unannotated(self) -> NonNegativeInt:
         return sum(m.n_unannotated for m in self.methods)
 
     @classmethod
@@ -186,22 +193,22 @@ class ModuleReport(BaseModel):
 
     @computed_field
     @property
-    def n_annotatable(self) -> int:
+    def n_annotatable(self) -> NonNegativeInt:
         return sum(s.n_annotatable for s in self.symbol_reports)
 
     @computed_field
     @property
-    def n_annotated(self) -> int:
+    def n_annotated(self) -> NonNegativeInt:
         return sum(s.n_annotated for s in self.symbol_reports)
 
     @computed_field
     @property
-    def n_any(self) -> int:
+    def n_any(self) -> NonNegativeInt:
         return sum(s.n_any for s in self.symbol_reports)
 
     @computed_field
     @property
-    def n_unannotated(self) -> int:
+    def n_unannotated(self) -> NonNegativeInt:
         return sum(s.n_unannotated for s in self.symbol_reports)
 
     def coverage(self, strict: bool = False, /) -> float:
@@ -235,22 +242,22 @@ class PackageReport(BaseModel):
 
     @computed_field
     @property
-    def n_annotatable(self) -> int:
+    def n_annotatable(self) -> NonNegativeInt:
         return sum(m.n_annotatable for m in self.module_reports)
 
     @computed_field
     @property
-    def n_annotated(self) -> int:
+    def n_annotated(self) -> NonNegativeInt:
         return sum(m.n_annotated for m in self.module_reports)
 
     @computed_field
     @property
-    def n_any(self) -> int:
+    def n_any(self) -> NonNegativeInt:
         return sum(m.n_any for m in self.module_reports)
 
     @computed_field
     @property
-    def n_unannotated(self) -> int:
+    def n_unannotated(self) -> NonNegativeInt:
         return sum(m.n_unannotated for m in self.module_reports)
 
     def coverage(self, strict: bool = False, /) -> float:
