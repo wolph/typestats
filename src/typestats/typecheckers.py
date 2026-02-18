@@ -11,7 +11,7 @@ import anyio
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
 
-    from _typeshed import Incomplete, StrPath  # noqa: PLC2701
+    from _typeshed import StrPath
 
 __all__ = (
     "TypeCheckerConfigDict",
@@ -25,8 +25,8 @@ __all__ = (
 )
 
 
-type _AsyncParser = Callable[[anyio.Path], Awaitable[dict[str, Incomplete] | None]]
-type TypeCheckerConfigDict = dict[str, Incomplete]
+type _AsyncParser = Callable[[anyio.Path], Awaitable[dict[str, Any] | None]]
+type TypeCheckerConfigDict = dict[str, Any]
 type TypeCheckerName = Literal["mypy", "pyright", "pyrefly", "ty", "zuban"]
 
 
@@ -136,7 +136,7 @@ class MypyConfig(TypecheckerConfig):
         return paths
 
     @staticmethod
-    async def _parse_ini(path: anyio.Path, /) -> dict[str, Incomplete] | None:
+    async def _parse_ini(path: anyio.Path, /) -> dict[str, Any] | None:
         """Parse a mypy INI-style config file."""
         parser = await _parse_ini_sections(path)
 
@@ -195,14 +195,14 @@ class PyrightConfig(TypecheckerConfig):
         )
 
     @staticmethod
-    async def _parse_json(path: anyio.Path, /) -> dict[str, Incomplete] | None:
+    async def _parse_json(path: anyio.Path, /) -> dict[str, Any] | None:
         """Parse a ``pyrightconfig.json`` file."""
         text = await path.read_text()
         parsed = json.loads(text)
         return parsed if _is_json_dict(parsed) else None
 
     @staticmethod
-    async def _parse_pyproject(path: anyio.Path, /) -> dict[str, Incomplete] | None:
+    async def _parse_pyproject(path: anyio.Path, /) -> dict[str, Any] | None:
         """Parse Pyright config from ``[tool.pyright]``."""
         if (tool := await _parse_pyproject_tool(path)) is None:
             return None
@@ -214,7 +214,7 @@ class PyrightConfig(TypecheckerConfig):
 _pyright = PyrightConfig()
 
 
-async def pyright_config(project_dir: StrPath, /) -> dict[str, Incomplete] | None:
+async def pyright_config(project_dir: StrPath, /) -> dict[str, Any] | None:
     """
     Returns the Pyright config for the given project directory, or ``None``
     if no config is found.
@@ -240,7 +240,7 @@ class PyreflyConfig(TypecheckerConfig):
         )
 
     @staticmethod
-    async def _parse_toml(path: anyio.Path, /) -> dict[str, Incomplete] | None:
+    async def _parse_toml(path: anyio.Path, /) -> dict[str, Any] | None:
         """Parse a `pyrefly.toml` file."""
         parsed = tomllib.loads(await path.read_text())
         return dict(parsed) if parsed else None
@@ -298,7 +298,7 @@ class TyConfig(TypecheckerConfig):
         return paths
 
     @staticmethod
-    async def _parse_toml(path: anyio.Path, /) -> dict[str, Incomplete] | None:
+    async def _parse_toml(path: anyio.Path, /) -> dict[str, Any] | None:
         """Parse a `ty.toml` file."""
         return tomllib.loads(await path.read_text()) or None
 

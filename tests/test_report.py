@@ -1,4 +1,3 @@
-import anyio
 import libcst as cst
 import pytest
 
@@ -176,11 +175,11 @@ class TestSymbolReport:
 
 class TestModuleReport:
     def test_name_module(self) -> None:
-        m = ModuleReport(anyio.Path("pkg/sub/mod.py"), ())
+        m = ModuleReport(path="pkg/sub/mod.py", symbol_reports=())
         assert m.name == "pkg.sub.mod"
 
     def test_name_module_init(self) -> None:
-        m = ModuleReport(anyio.Path("pkg/__init__.py"), ())
+        m = ModuleReport(path="pkg/__init__.py", symbol_reports=())
         assert m.name == "pkg"
 
     def test_names(self) -> None:
@@ -211,14 +210,14 @@ class TestModuleReport:
         assert m.coverage(True) == pytest.approx(1 / 2)
 
     def test_coverage_empty(self) -> None:
-        m = ModuleReport(anyio.Path("m.py"), ())
+        m = ModuleReport(path="m.py", symbol_reports=())
         assert m.coverage() == pytest.approx(0)
 
 
 class TestPackageReport:
     def _pkg(self, *symbols: Symbol) -> PackageReport:
         mod = ModuleReport.from_symbols("mod.py", list(symbols))
-        return PackageReport("pkg", (mod,), "1.0.0")
+        return PackageReport(package="pkg", module_reports=(mod,), version="1.0.0")
 
     def test_coverage(self) -> None:
         r = self._pkg(Symbol("a", _INT), Symbol("b", ANY))
@@ -242,9 +241,9 @@ class TestPackageReport:
     def test_typechecker_configs_stored(self) -> None:
         mod = ModuleReport.from_symbols("mod.py", [Symbol("a", _INT)])
         r = PackageReport(
-            "pkg",
-            (mod,),
-            "1.0.0",
+            package="pkg",
+            module_reports=(mod,),
+            version="1.0.0",
             typecheckers={
                 "mypy": {"strict": True},
                 "ty": {"python-version": "3.14"},
