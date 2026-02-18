@@ -64,10 +64,8 @@ def _public_symbol_names(project_dir: Path) -> set[str]:
     """Collect all public symbol names from a fixture project."""
 
     async def _run() -> set[str]:
-        symbols_by_path = await collect_public_symbols(project_dir)
-        return {
-            symbol.name for symbols in symbols_by_path.values() for symbol in symbols
-        }
+        pub = await collect_public_symbols(project_dir)
+        return {symbol.name for symbols in pub.symbols.values() for symbol in symbols}
 
     return anyio.run(_run)
 
@@ -219,10 +217,10 @@ def _public_symbol_types(project_dir: Path) -> dict[str, analyze.TypeForm]:
     """Collect public symbol names mapped to their resolved types."""
 
     async def _run() -> dict[str, analyze.TypeForm]:
-        symbols_by_path = await collect_public_symbols(project_dir)
+        pub = await collect_public_symbols(project_dir)
         return {
             symbol.name: symbol.type_
-            for symbols in symbols_by_path.values()
+            for symbols in pub.symbols.values()
             for symbol in symbols
         }
 
@@ -595,7 +593,7 @@ def _merged_stubs_types() -> dict[str, analyze.TypeForm]:
     async def _run() -> dict[str, analyze.TypeForm]:
         orig = await collect_public_symbols(_STUBS_BASE, trace_origins=False)
         stubs = await collect_public_symbols(_STUBS_OVERLAY, trace_origins=False)
-        merged = merge_stubs_overlay(orig, stubs)
+        merged = merge_stubs_overlay(orig.symbols, stubs.symbols)
         return {s.name: s.type_ for syms in merged.values() for s in syms}
 
     return anyio.run(_run)
@@ -637,9 +635,9 @@ def test_merge_stubs_overlay_count_invariant() -> None:
         orig = await collect_public_symbols(_STUBS_BASE)
         orig_flat = await collect_public_symbols(_STUBS_BASE, trace_origins=False)
         stubs = await collect_public_symbols(_STUBS_OVERLAY, trace_origins=False)
-        merged = merge_stubs_overlay(orig_flat, stubs)
+        merged = merge_stubs_overlay(orig_flat.symbols, stubs.symbols)
         return (
-            sum(len(v) for v in orig.values()),
+            sum(len(v) for v in orig.symbols.values()),
             sum(len(v) for v in merged.values()),
         )
 
