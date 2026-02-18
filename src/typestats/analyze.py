@@ -105,7 +105,8 @@ class _VersionGuardTransformer(cst.CSTTransformer):
                 self._imports[alias.asname.name.value] = name
             else:
                 # `import a.b.c` binds the top-level name `a`
-                self._imports[name.split(".", 1)[0]] = name.split(".", 1)[0]
+                top_level = name.split(".", 1)[0]
+                self._imports[top_level] = top_level
         return False
 
     @override
@@ -143,7 +144,7 @@ class _VersionGuardTransformer(cst.CSTTransformer):
         """Check if *node* represents ``sys.version_info``."""
         if isinstance(node, cst.Subscript):
             if self._resolve_name(node.value) == "sys.version_info":
-                _log.warning("subscripted sys.version_info is not supported")
+                _logger.warning("subscripted sys.version_info is not supported")
             return False
         return self._resolve_name(node) == "sys.version_info"
 
@@ -170,7 +171,7 @@ class _VersionGuardTransformer(cst.CSTTransformer):
             case cst.LessThan():
                 return _TARGET_VERSION < version  # noqa: SIM300
             case _:
-                _log.warning(
+                _logger.warning(
                     "unsupported version_info operator: %s",
                     type(cmp.operator).__name__,
                 )
@@ -229,6 +230,7 @@ class _VersionGuardTransformer(cst.CSTTransformer):
             return self._flatten_body(updated.orelse.body)
 
         # elif chain: recurse into the next branch.
+        assert isinstance(updated.orelse, cst.If)
         assert isinstance(original.orelse, cst.If)
         return self._resolve_chain(original.orelse, updated.orelse)
 
