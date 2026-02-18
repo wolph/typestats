@@ -4,6 +4,7 @@ import os
 import re
 import time
 from collections import defaultdict, deque
+from dataclasses import dataclass, field
 from itertools import chain
 from typing import TYPE_CHECKING, Final
 
@@ -18,10 +19,28 @@ if TYPE_CHECKING:
     from _typeshed import StrPath
 
 
-__all__ = "collect_public_symbols", "list_sources", "merge_stubs_overlay"
+__all__ = (
+    "PublicSymbols",
+    "collect_public_symbols",
+    "list_sources",
+    "merge_stubs_overlay",
+)
 
 
 _logger: Final = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class PublicSymbols:
+    """Result of `collect_public_symbols`."""
+
+    symbols: Mapping[anyio.Path, Sequence[analyze.Symbol]] = field(
+        default_factory=dict,
+    )
+    type_ignores: Mapping[anyio.Path, tuple[analyze.IgnoreComment, ...]] = field(
+        default_factory=dict,
+    )
+
 
 _RE_INIT: Final = re.compile(r"^__init__\.pyi?$")
 _RE_STUBS_DIR: Final = re.compile(r"^(.+)-stubs$")
@@ -325,7 +344,7 @@ async def collect_public_symbols(  # noqa: C901, PLR0912, PLR0914, PLR0915
     *,
     trace_origins: bool = True,
     package_name: str | None = None,
-) -> Mapping[anyio.Path, Sequence[analyze.Symbol]]:
+) -> PublicSymbols:
     """Collect public, fully qualified symbols from a package by source path.
 
     Symbols are attributed to their *origin* source file.  When a public module
@@ -527,9 +546,16 @@ async def collect_public_symbols(  # noqa: C901, PLR0912, PLR0914, PLR0915
     for fqn, (path, type_) in public.items():
         result[path].append(analyze.Symbol(fqn, type_))
 
+    # Collect per-path type-ignore comments
+    type_ignores: dict[anyio.Path, tuple[analyze.IgnoreComment, ...]] = {}
+    for entries in module_data.values():
+        for path, syms in entries.items():
+            if syms.ignore_comments:
+                type_ignores[path] = type_ignores.get(path, ()) + syms.ignore_comments
+
     elapsed = time.perf_counter() - t0
     _logger.info("collect_public_symbols: %.2fs", elapsed)
-    return result
+    return PublicSymbols(symbols=dict(result), type_ignores=type_ignores)
 
 
 def merge_stubs_overlay(

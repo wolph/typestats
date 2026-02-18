@@ -219,6 +219,7 @@ class ModuleReport(BaseModel):
 
     path: str
     symbol_reports: tuple[_AnySymbolReport, ...]
+    type_ignores: tuple[analyze.IgnoreComment, ...] = ()
 
     @computed_field
     @property
@@ -284,6 +285,11 @@ class ModuleReport(BaseModel):
     def n_names(self) -> NonNegativeInt:
         return sum(s.n_names for s in self.symbol_reports)
 
+    @computed_field
+    @property
+    def n_type_ignores(self) -> NonNegativeInt:
+        return len(self.type_ignores)
+
     def coverage(self, strict: bool = False, /) -> float:
         """
         Coverage ratio.
@@ -296,10 +302,18 @@ class ModuleReport(BaseModel):
         return annotated / total if total else 0.0
 
     @classmethod
-    def from_symbols(cls, path: StrPath, symbols: _Symbols) -> Self:
+    def from_symbols(
+        cls,
+        path: StrPath,
+        symbols: _Symbols,
+        /,
+        *,
+        type_ignores: Sequence[analyze.IgnoreComment] = (),
+    ) -> Self:
         return cls(
             path=anyio.Path(path).as_posix(),
             symbol_reports=tuple(_symbol_report(s) for s in symbols),
+            type_ignores=tuple(type_ignores),
         )
 
 
@@ -312,6 +326,11 @@ class PackageReport(BaseModel):
     typecheckers: dict[TypeCheckerName, TypeCheckerConfigDict] = Field(
         default_factory=dict,
     )
+
+    @computed_field
+    @property
+    def n_modules(self) -> NonNegativeInt:
+        return len(self.module_reports)
 
     @computed_field
     @property
@@ -363,6 +382,16 @@ class PackageReport(BaseModel):
     def n_names(self) -> NonNegativeInt:
         return sum(m.n_names for m in self.module_reports)
 
+    @computed_field
+    @property
+    def type_ignores(self) -> tuple[analyze.IgnoreComment, ...]:
+        return tuple(ignore for m in self.module_reports for ignore in m.type_ignores)
+
+    @computed_field
+    @property
+    def n_type_ignores(self) -> NonNegativeInt:
+        return sum(m.n_type_ignores for m in self.module_reports)
+
     def coverage(self, strict: bool = False, /) -> float:
         """Coverage ratio. If *strict*, `Any` slots don't count."""
         total = self.n_annotatable
@@ -386,9 +415,11 @@ class PackageReport(BaseModel):
             f"{self.n_any} Any, {self.n_unannotated} missing)",
         )
         print(  # noqa: T201
-            f"   {self.n_functions} functions ({self.n_function_overloads} overloads), "
+            f"   {self.n_modules} modules, "
+            f"{self.n_functions} functions ({self.n_function_overloads} overloads), "
             f"{self.n_methods} methods ({self.n_method_overloads} overloads), "
-            f"{self.n_classes} classes, {self.n_names} names",
+            f"{self.n_classes} classes, {self.n_names} names, "
+            f"{self.n_type_ignores} ignore comments",
         )
         if self.typecheckers:
             checkers = ", ".join(sorted(self.typecheckers))
@@ -436,11 +467,27 @@ class PackageReport(BaseModel):
             )
 
         results: list[Any] = await asyncio.gather(*coros)
-        symbols: Mapping[anyio.Path, _Symbols] = results[0]
+        from typestats.index import PublicSymbols
+
+        pub: PublicSymbols = results[0]
         configs: Mapping[TypeCheckerName, TypeCheckerConfigDict] = results[1]
 
         if stubs_path is not None:
-            symbols = merge_stubs_overlay(symbols, results[2])
+            stubs_pub: PublicSymbols = results[2]
+            symbols = merge_stubs_overlay(pub.symbols, stubs_pub.symbols)
+            # Keep only ignore comments for paths present in the merged
+            # symbols: stubs comments for stubs-covered modules, original
+            # comments for uncovered modules.
+            type_ignores = {
+                src_path: stubs_pub.type_ignores.get(
+                    src_path,
+                    pub.type_ignores.get(src_path, ()),
+                )
+                for src_path in symbols
+            }
+        else:
+            symbols = pub.symbols
+            type_ignores = pub.type_ignores
 
         stubs_p = anyio.Path(stubs_path) if stubs_path is not None else None
 
@@ -451,7 +498,11 @@ class PackageReport(BaseModel):
                 return src.relative_to(path)
 
         files = tuple(
-            ModuleReport.from_symbols(_rel(src_path), syms)
+            ModuleReport.from_symbols(
+                _rel(src_path),
+                syms,
+                type_ignores=type_ignores.get(src_path, ()),
+            )
             for src_path, syms in symbols.items()
         )
         return cls(
