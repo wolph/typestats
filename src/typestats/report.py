@@ -218,7 +218,7 @@ class ModuleReport(BaseModel):
     @classmethod
     def from_symbols(cls, path: StrPath, symbols: _Symbols) -> Self:
         return cls(
-            path=str(path),
+            path=anyio.Path(path).as_posix(),
             symbol_reports=tuple(_symbol_report(s) for s in symbols),
         )
 
