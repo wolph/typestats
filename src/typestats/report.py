@@ -535,15 +535,15 @@ async def main() -> None:
             if m := re.match(r"^(.+)-stubs$", package):
                 # Stubs package: download both base and stubs concurrently
                 base_name = m.group(1)
-                (base_path, base_sdist), (stubs_path, _) = await asyncio.gather(
+                (base_path, _), (stubs_path, stubs_sdist) = await asyncio.gather(
                     _pypi.download_sdist_latest(client, base_name, temp_dir),
                     _pypi.download_sdist_latest(client, package, temp_dir),
                 )
-                _, base_ver = parse_sdist_filename(base_sdist["filename"])
+                _, stubs_ver = parse_sdist_filename(stubs_sdist["filename"])
                 report = await PackageReport.from_path(
                     base_name,
                     base_path,
-                    str(base_ver),
+                    str(stubs_ver),
                     stubs_path=stubs_path,
                     project=package,
                 )
