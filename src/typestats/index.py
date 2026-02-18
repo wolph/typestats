@@ -34,8 +34,10 @@ _logger: Final = logging.getLogger(__name__)
 class PublicSymbols:
     """Result of `collect_public_symbols`."""
 
-    symbols: dict[anyio.Path, list[analyze.Symbol]] = field(default_factory=dict)
-    type_ignores: dict[anyio.Path, tuple[analyze.IgnoreComment, ...]] = field(
+    symbols: Mapping[anyio.Path, Sequence[analyze.Symbol]] = field(
+        default_factory=dict,
+    )
+    type_ignores: Mapping[anyio.Path, tuple[analyze.IgnoreComment, ...]] = field(
         default_factory=dict,
     )
 

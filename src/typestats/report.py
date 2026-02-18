@@ -475,11 +475,16 @@ class PackageReport(BaseModel):
         if stubs_path is not None:
             stubs_pub: PublicSymbols = results[2]
             symbols = merge_stubs_overlay(pub.symbols, stubs_pub.symbols)
-            # Only include ignore comments from the effective file per
-            # module: stubs comments for stubs-covered modules, original
-            # comments for uncovered modules.  Paths are absolute and
-            # never collide between the two packages.
-            type_ignores = {**pub.type_ignores, **stubs_pub.type_ignores}
+            # Keep only ignore comments for paths present in the merged
+            # symbols: stubs comments for stubs-covered modules, original
+            # comments for uncovered modules.
+            type_ignores = {
+                src_path: stubs_pub.type_ignores.get(
+                    src_path,
+                    pub.type_ignores.get(src_path, ()),
+                )
+                for src_path in symbols
+            }
         else:
             symbols = pub.symbols
             type_ignores = pub.type_ignores
