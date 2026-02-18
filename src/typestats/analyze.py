@@ -648,7 +648,6 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
                 if get_full_name_for_node(element_node.value) == "__all__":
                     element_value = value.elements[idx].value
                     if isinstance(element_value, (cst.List, cst.Tuple, cst.Set)):
-                        self._is_assigned_export.add(value)
                         self._is_assigned_export.add(element_value)
                         return True
         return False
