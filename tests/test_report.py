@@ -408,3 +408,36 @@ class TestPackageReportFromPath:
         report = await PackageReport.from_path("mypkg", base, "1.0.0")
 
         assert "mypy" in report.typecheckers
+
+    async def test_stubs_project_name(self, tmp_path: Path) -> None:
+        """When *project* is given, the report should use it as the package name."""
+        base = tmp_path / "base"
+        stubs = tmp_path / "stubs"
+        shutil.copytree(_FIXTURES / "stubs_base", base)
+        shutil.copytree(_FIXTURES / "stubs_overlay", stubs)
+
+        report = await PackageReport.from_path(
+            "mypkg",
+            base,
+            "1.0.0",
+            stubs_path=stubs,
+            project="mypkg-stubs",
+        )
+
+        assert report.package == "mypkg-stubs"
+
+    async def test_stubs_default_project_name(self, tmp_path: Path) -> None:
+        """Without *project*, the report should use *pkg* as the package name."""
+        base = tmp_path / "base"
+        stubs = tmp_path / "stubs"
+        shutil.copytree(_FIXTURES / "stubs_base", base)
+        shutil.copytree(_FIXTURES / "stubs_overlay", stubs)
+
+        report = await PackageReport.from_path(
+            "mypkg",
+            base,
+            "1.0.0",
+            stubs_path=stubs,
+        )
+
+        assert report.package == "mypkg"

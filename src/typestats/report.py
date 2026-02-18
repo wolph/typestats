@@ -434,6 +434,7 @@ class PackageReport(BaseModel):
         /,
         *,
         stubs_path: StrPath | None = None,
+        project: str | None = None,
     ) -> Self:
         """Build a `PackageReport` by analysing the package at *path*.
 
@@ -441,6 +442,11 @@ class PackageReport(BaseModel):
         symbols from the stubs overlay take priority and any original symbol
         whose module is covered by stubs but absent from those stubs is
         marked ``UNKNOWN``.
+
+        When *project* is given, it is used as the display name in the report
+        instead of *pkg* (useful for stubs packages where the PyPI project
+        name differs from the Python package name, e.g. ``scipy-stubs``
+        vs ``scipy``).
 
         Runs ``collect_public_symbols`` (and optionally the stubs collection)
         and ``discover_configs`` concurrently.
@@ -506,7 +512,7 @@ class PackageReport(BaseModel):
             for src_path, syms in symbols.items()
         )
         return cls(
-            package=pkg,
+            package=project or pkg,
             module_reports=files,
             version=version,
             typecheckers=dict(configs),
@@ -539,6 +545,7 @@ async def main() -> None:
                     base_path,
                     str(base_ver),
                     stubs_path=stubs_path,
+                    project=package,
                 )
             else:
                 # Base package: analyze standalone
