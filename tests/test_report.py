@@ -1,3 +1,7 @@
+import json
+import shutil
+from pathlib import Path
+
 import libcst as cst
 import pytest
 
@@ -25,6 +29,8 @@ from typestats.report import (
     _SlotState,
     _symbol_report,
 )
+
+_FIXTURES = Path(__file__).parent / "fixtures"
 
 _INT = Expr(cst.parse_expression("int"))
 _PARAM = ParamKind.POSITIONAL_OR_KEYWORD
@@ -363,3 +369,42 @@ class TestPackageReport:
         )
         assert r.n_type_ignores == 3
         assert r.type_ignores == (c1, c2, c3)
+
+
+class TestPackageReportFromPath:
+    pytestmark = pytest.mark.anyio
+
+    async def test_stubs_typecheckers_from_stubs_path(self, tmp_path: Path) -> None:
+        """Type-checker configs should come from stubs_path, not the base path."""
+        base = tmp_path / "base"
+        stubs = tmp_path / "stubs"
+        shutil.copytree(_FIXTURES / "stubs_base", base)
+        shutil.copytree(_FIXTURES / "stubs_overlay", stubs)
+
+        # Place a mypy config only in the base dir (should be ignored)
+        (base / "mypy.ini").write_text("[mypy]\nstrict = True\n")
+
+        # Place a pyright config only in the stubs dir (should be discovered)
+        (stubs / "pyrightconfig.json").write_text(json.dumps({"strict": ["."]}))
+
+        report = await PackageReport.from_path(
+            "mypkg",
+            base,
+            "1.0.0",
+            stubs_path=stubs,
+        )
+
+        assert "pyright" in report.typecheckers
+        assert "mypy" not in report.typecheckers
+
+    async def test_base_typecheckers_without_stubs(self, tmp_path: Path) -> None:
+        """Without stubs_path, type-checker configs come from the base path."""
+        base = tmp_path / "base"
+        shutil.copytree(_FIXTURES / "stubs_base", base)
+
+        # Place a mypy config in the base dir
+        (base / "mypy.ini").write_text("[mypy]\nstrict = True\n")
+
+        report = await PackageReport.from_path("mypkg", base, "1.0.0")
+
+        assert "mypy" in report.typecheckers
