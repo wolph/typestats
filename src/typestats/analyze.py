@@ -6,14 +6,13 @@ from typing import TYPE_CHECKING, Final, Literal, Self, override
 
 import libcst as cst
 import mainpy
-from libcst.codemod import CodemodContext
-from libcst.codemod.visitors import GatherExportsVisitor, GatherImportsVisitor
-from libcst.helpers import get_full_name_for_node
-from libcst.metadata import MetadataWrapper
+from libcst.helpers import (
+    get_absolute_module_from_package_for_import,
+    get_full_name_for_node,
+)
 
 if TYPE_CHECKING:
-    import types
-    from collections.abc import Callable, Collection, Mapping
+    from collections.abc import Callable, Collection
 
 __all__ = (
     "ANY",
@@ -364,32 +363,79 @@ class _ClassStackItem:
     members: list[TypeForm]
 
 
-class _SymbolVisitor(cst.BatchableCSTVisitor):
-    module: Final[cst.Module]
+class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
+    _TYPE_IGNORE_RE: Final[re.Pattern[str]] = re.compile(
+        r"""
+        \s*\#\s*
+        ([a-z]+)\s*:\s*
+        ignore\b
+        (?:\s*\[\s*([^\]]+)\s*\])?
+        """,
+        re.VERBOSE,
+    )
+
+    # --- Results ---
     symbols: Final[list[Symbol]]
     type_aliases: Final[list[TypeAlias]]
     import_aliases: Final[list[tuple[str, str]]]
     type_check_only_names: Final[set[str]]
+    ignore_comments: Final[list[IgnoreComment]]
 
+    # --- Imports state ---
+    module_imports: Final[set[str]]
+    module_aliases: Final[dict[str, str]]
+    object_mapping: Final[dict[str, set[str]]]
+    alias_mapping: Final[dict[str, list[tuple[str, str]]]]
+
+    # --- Exports state ---
+    has_explicit_all: bool
+    all_sources: Final[list[str]]
+    _exported_objects: Final[set[str]]
+    _is_assigned_export: Final[set[cst.Tuple | cst.List | cst.Set]]
+    _in_assigned_export: Final[set[cst.Tuple | cst.List | cst.Set]]
+
+    # --- Symbol state ---
     _imports: Final[dict[str, str]]
     _defined_names: Final[set[str]]
     _class_stack: Final[deque[_ClassStackItem]]
     _function_depth: int
+    _skipped_class_depth: int
     _overload_map: defaultdict[str, list[Overload]]
     _added_functions: set[str]
 
-    def __init__(self, module: cst.Module, imports: Mapping[str, str], /) -> None:
-        self.module = module
+    _package_name: Final[str]
+
+    def __init__(self, /, *, package_name: str = "") -> None:
         self.symbols = []
         self.type_aliases = []
         self.import_aliases = []
         self.type_check_only_names = set()
-        self._imports = dict(imports)
+        self.ignore_comments = []
+
+        self.module_imports = set()
+        self.module_aliases = {}
+        self.object_mapping = {}
+        self.alias_mapping = {}
+
+        self.has_explicit_all = False
+        self.all_sources = []
+        self._exported_objects = set()
+        self._is_assigned_export = set()
+        self._in_assigned_export = set()
+
+        self._imports = {}
         self._defined_names = set()
         self._class_stack = deque()
         self._function_depth = 0
+        self._skipped_class_depth = 0
         self._overload_map = defaultdict(list)
         self._added_functions = set()
+
+        self._package_name = package_name
+
+    @property
+    def exports_explicit(self) -> frozenset[str] | None:
+        return frozenset(self._exported_objects) if self.has_explicit_all else None
 
     def _resolve_name(self, node: cst.CSTNode) -> str | None:
         """Resolve a CST node to its fully qualified name using the import map."""
@@ -524,10 +570,157 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
                 return True
         return False
 
+    # --- Import handling ---
+
+    def _handle_import(self, node: cst.Import) -> None:
+        if isinstance(node.names, cst.ImportStar):
+            return
+        for name in node.names:
+            alias = name.evaluated_alias
+            evaluated_name = name.evaluated_name
+            if alias is not None:
+                self.module_aliases[evaluated_name] = alias
+                self._imports[alias] = evaluated_name
+            else:
+                self.module_imports.add(evaluated_name)
+                self._imports[evaluated_name] = evaluated_name
+
+    def _handle_import_from(self, node: cst.ImportFrom) -> None:
+        module = get_absolute_module_from_package_for_import(
+            self._package_name,
+            node,
+        )
+        if module is None:
+            return
+
+        nodenames = node.names
+        if isinstance(nodenames, cst.ImportStar):
+            self.object_mapping[module] = set("*")
+            return
+
+        self._collect_import_from_names(module, nodenames)
+
+    def _collect_import_from_names(
+        self,
+        module: str,
+        nodenames: Collection[cst.ImportAlias],
+    ) -> None:
+        for ia in nodenames:
+            alias = ia.evaluated_alias
+            name = ia.evaluated_name
+            if alias is not None:
+                self.alias_mapping.setdefault(module, []).append((name, alias))
+                self._imports[alias] = f"{module}.{name}"
+            elif name != "*":
+                objects = self.object_mapping.setdefault(module, set())
+                if "*" not in objects:
+                    objects.add(name)
+                self._imports[name] = f"{module}.{name}"
+
+    @override
+    def visit_Import(self, node: cst.Import) -> bool:
+        self._handle_import(node)
+        return False
+
+    @override
+    def visit_ImportFrom(self, node: cst.ImportFrom) -> bool:
+        self._handle_import_from(node)
+        return False
+
+    # --- Export handling ---
+
+    @staticmethod
+    def _is_all_target(target: cst.BaseExpression) -> bool:
+        return get_full_name_for_node(target) == "__all__"
+
+    def _handle_assign_target_exports(
+        self,
+        target: cst.BaseExpression,
+        value: cst.BaseExpression,
+    ) -> bool:
+        target_name = get_full_name_for_node(target)
+        if target_name == "__all__":
+            if isinstance(value, (cst.List, cst.Tuple, cst.Set)):
+                self._is_assigned_export.add(value)
+                return True
+        elif isinstance(target, cst.Tuple) and isinstance(value, cst.Tuple):
+            for idx, element_node in enumerate(target.elements):
+                if get_full_name_for_node(element_node.value) == "__all__":
+                    element_value = value.elements[idx].value
+                    if isinstance(element_value, (cst.List, cst.Tuple, cst.Set)):
+                        self._is_assigned_export.add(value)
+                        self._is_assigned_export.add(element_value)
+                        return True
+        return False
+
+    @override
+    def visit_List(self, node: cst.List) -> bool:
+        if node in self._is_assigned_export:
+            self._in_assigned_export.add(node)
+        return True
+
+    @override
+    def leave_List(self, original_node: cst.List) -> None:
+        self._is_assigned_export.discard(original_node)
+        self._in_assigned_export.discard(original_node)
+
+    @override
+    def visit_Tuple(self, node: cst.Tuple) -> bool:
+        if node in self._is_assigned_export:
+            self._in_assigned_export.add(node)
+        return True
+
+    @override
+    def leave_Tuple(self, original_node: cst.Tuple) -> None:
+        self._is_assigned_export.discard(original_node)
+        self._in_assigned_export.discard(original_node)
+
+    @override
+    def visit_Set(self, node: cst.Set) -> bool:
+        if node in self._is_assigned_export:
+            self._in_assigned_export.add(node)
+        return True
+
+    @override
+    def leave_Set(self, original_node: cst.Set) -> None:
+        self._is_assigned_export.discard(original_node)
+        self._in_assigned_export.discard(original_node)
+
+    @override
+    def visit_SimpleString(self, node: cst.SimpleString) -> bool:
+        if self._in_assigned_export:
+            name = node.evaluated_value
+            if isinstance(name, str):
+                self._exported_objects.add(name)
+        return False
+
+    @override
+    def visit_ConcatenatedString(self, node: cst.ConcatenatedString) -> bool:
+        if self._in_assigned_export:
+            name = node.evaluated_value
+            if isinstance(name, str):
+                self._exported_objects.add(name)
+        return False
+
+    # --- Type-ignore comment handling ---
+
+    @override
+    def visit_TrailingWhitespace(self, node: cst.TrailingWhitespace) -> bool:
+        if node.comment is not None:
+            for match in self._TYPE_IGNORE_RE.finditer(node.comment.value):
+                rules = match.group(2)
+                if rules is not None:
+                    rules = frozenset(r.strip() for r in rules.split(",") if r.strip())
+                self.ignore_comments.append(IgnoreComment(match.group(1), rules))
+        return False
+
+    # --- Symbol handling ---
+
     @override
     def visit_ClassDef(self, node: cst.ClassDef) -> bool:
         if self._function_depth:
-            return False
+            self._skipped_class_depth += 1
+            return True  # still visit children for type-ignore comments
 
         name = node.name.value
         if not self._class_stack:
@@ -550,6 +743,9 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
 
     @override
     def leave_ClassDef(self, original_node: cst.ClassDef) -> None:
+        if self._skipped_class_depth:
+            self._skipped_class_depth -= 1
+            return
         if stack := self._class_stack:
             item = stack.pop()
             self.symbols[item.symbol_index] = Symbol(
@@ -612,9 +808,17 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
 
     @override
     def visit_AnnAssign(self, node: cst.AnnAssign) -> None:
-        if self._function_depth != 0:
-            return
+        # Exports: detect ``__all__: ... = [...]``
+        if self._is_all_target(node.target):
+            self.has_explicit_all = True
+        if node.value is not None:
+            self._handle_assign_target_exports(node.target, node.value)
 
+        # Symbols
+        if self._function_depth == 0:
+            self._handle_ann_assign_symbols(node)
+
+    def _handle_ann_assign_symbols(self, node: cst.AnnAssign) -> None:
         # __slots__ is a runtime implementation detail, not a type annotation
         if self._class_stack and _is_dunder_slots(node.target):
             return
@@ -707,10 +911,42 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
         return False
 
     @override
-    def visit_Assign(self, node: cst.Assign) -> None:
-        if self._function_depth:
+    def visit_AugAssign(self, node: cst.AugAssign) -> None:
+        # Exports: detect ``__all__ += [...]`` and ``__all__ += mod.__all__``
+        if not self._is_all_target(node.target):
             return
 
+        self.has_explicit_all = True
+        value = node.value
+        if (
+            isinstance(value, cst.Attribute)
+            and value.attr.value == "__all__"
+            and (source_name := get_full_name_for_node(value.value))
+        ):
+            self.all_sources.append(source_name)
+
+        if isinstance(node.operator, cst.AddAssign) and isinstance(
+            value,
+            (cst.List, cst.Tuple),
+        ):
+            self._is_assigned_export.add(value)
+
+    @override
+    def visit_Assign(self, node: cst.Assign) -> None:
+        # Exports: detect ``__all__ = [...]``
+        if (
+            not self.has_explicit_all
+            and any(self._is_all_target(target.target) for target in node.targets)
+        ):  # fmt: skip
+            self.has_explicit_all = True
+        for target_node in node.targets:
+            self._handle_assign_target_exports(target_node.target, node.value)
+
+        # Symbols
+        if not self._function_depth:
+            self._handle_assign_symbols(node)
+
+    def _handle_assign_symbols(self, node: cst.Assign) -> None:
         # __slots__ is a runtime implementation detail, not a type annotation
         if self._class_stack and all(
             _is_dunder_slots(target.target) for target in node.targets
@@ -741,108 +977,6 @@ class _SymbolVisitor(cst.BatchableCSTVisitor):
             self._add_type_alias(node.name, node.value)
 
 
-class _ExportsVisitor(GatherExportsVisitor, cst.BatchableCSTVisitor):
-    has_explicit_all: bool
-    all_sources: list[str]
-
-    def __init__(self, context: CodemodContext) -> None:
-        super().__init__(context)
-        self.has_explicit_all = False
-        self.all_sources = []
-
-    @override
-    def get_visitors(self) -> Mapping[str, types.MethodType]:
-        # workaround for https://github.com/Instagram/LibCST/pull/1439
-        return {
-            "visit_AnnAssign": self.visit_AnnAssign,
-            "visit_AugAssign": self.visit_AugAssign,
-            "visit_Assign": self.visit_Assign,
-            "visit_List": self.visit_List,
-            "leave_List": self.leave_List,
-            "visit_Tuple": self.visit_Tuple,
-            "leave_Tuple": self.leave_Tuple,
-            "visit_Set": self.visit_Set,
-            "leave_Set": self.leave_Set,
-            "visit_SimpleString": self.visit_SimpleString,
-            "visit_ConcatenatedString": self.visit_ConcatenatedString,
-        }
-
-    @staticmethod
-    def _is_all_target(target: cst.BaseExpression) -> bool:
-        return get_full_name_for_node(target) == "__all__"
-
-    @property
-    def exports_explicit(self) -> frozenset[str] | None:
-        return (
-            frozenset(self.explicit_exported_objects) if self.has_explicit_all else None
-        )
-
-    @override
-    def visit_AnnAssign(self, node: cst.AnnAssign) -> bool:
-        if self._is_all_target(node.target):
-            self.has_explicit_all = True
-        return super().visit_AnnAssign(node)
-
-    @override
-    def visit_AugAssign(self, node: cst.AugAssign) -> bool:
-        if self._is_all_target(node.target):
-            self.has_explicit_all = True
-            # Detect __all__ += X.__all__ pattern
-            if (
-                isinstance(value := node.value, cst.Attribute)
-                and value.attr.value == "__all__"
-                and (source_name := get_full_name_for_node(value.value))
-            ):
-                self.all_sources.append(source_name)
-        return super().visit_AugAssign(node)
-
-    @override
-    def visit_Assign(self, node: cst.Assign) -> bool:
-        if (
-            not self.has_explicit_all
-            and any(self._is_all_target(target.target) for target in node.targets)
-        ):  # fmt: skip
-            self.has_explicit_all = True
-        return super().visit_Assign(node)
-
-
-class _ImportsVisitor(GatherImportsVisitor, cst.BatchableCSTVisitor):
-    @override
-    def get_visitors(self) -> Mapping[str, types.MethodType]:
-        return {
-            "visit_Import": self.visit_Import,
-            "visit_ImportFrom": self.visit_ImportFrom,
-        }
-
-
-class _TypeIgnoreVisitor(cst.BatchableCSTVisitor):
-    _TYPE_IGNORE_RE: Final[re.Pattern[str]] = re.compile(
-        r"""
-        \s*\#\s*
-        ([a-z]+)\s*:\s*
-        ignore\b
-        (?:\s*\[\s*([^\]]+)\s*\])?
-        """,
-        re.VERBOSE,
-    )
-
-    comments: Final[list[IgnoreComment]]
-
-    def __init__(self) -> None:
-        self.comments = []
-
-    @override
-    def visit_TrailingWhitespace(self, node: cst.TrailingWhitespace) -> None:
-        if node.comment is None:
-            return
-
-        for match in self._TYPE_IGNORE_RE.finditer(node.comment.value):
-            rules = match.group(2)
-            if rules is not None:
-                rules = frozenset(r.strip() for r in rules.split(",") if r.strip())
-            self.comments.append(IgnoreComment(match.group(1), rules))
-
-
 def collect_symbols(
     source: str,
     /,
@@ -850,65 +984,32 @@ def collect_symbols(
     package_name: str | None = None,
 ) -> ModuleSymbols:
     module = cst.parse_module(source)
-    wrapper = MetadataWrapper(module, unsafe_skip_copy=True)
+    visitor = _SymbolVisitor(package_name=package_name or "")
+    module.visit(visitor)  # type: ignore[arg-type]  # CSTVisitor is accepted at runtime
 
-    # Phase 1: Collect imports, exports, and type-ignore comments.
-    # None of these visitors require metadata providers, so no expensive
-    # scope analysis is triggered.
-    exports_visitor = _ExportsVisitor(CodemodContext())
-    imports_visitor = _ImportsVisitor(
-        CodemodContext(full_package_name=package_name or ""),
-    )
-    type_ignore_visitor = _TypeIgnoreVisitor()
-    wrapper.visit_batched([exports_visitor, imports_visitor, type_ignore_visitor])
-
-    # Build an import map for lightweight name resolution (replaces
-    # the expensive QualifiedNameProvider / ScopeProvider pipeline).
-    imports_map: dict[str, str] = (
-        {mod: mod for mod in imports_visitor.module_imports}
-        | {alias: mod for mod, alias in imports_visitor.module_aliases.items()}
-        | {
-            obj: f"{mod}.{obj}"
-            for mod, objects in imports_visitor.object_mapping.items()
-            for obj in objects
-            if obj != "*"
-        }
-        | {
-            alias: f"{mod}.{obj}"
-            for mod, aliases in imports_visitor.alias_mapping.items()
-            for obj, alias in aliases
-        }
-    )
-
-    # Phase 2: Collect symbols using the import map for name resolution.
-    symbol_visitor = _SymbolVisitor(wrapper.module, imports_map)
-    wrapper.visit_batched([symbol_visitor])
-
-    imports = dict(symbol_visitor.import_aliases) | imports_map
+    imports = dict(visitor.import_aliases) | visitor._imports  # noqa: SLF001
 
     wildcard_modules = tuple(
-        mod for mod, objects in imports_visitor.object_mapping.items() if "*" in objects
+        mod for mod, objects in visitor.object_mapping.items() if "*" in objects
     )
 
     reexports = frozenset(
         name
-        for aliases in imports_visitor.alias_mapping.values()
+        for aliases in visitor.alias_mapping.values()
         for name, alias in aliases
         if name == alias
-    ) | frozenset(
-        mod for mod, alias in imports_visitor.module_aliases.items() if mod == alias
-    )
+    ) | frozenset(mod for mod, alias in visitor.module_aliases.items() if mod == alias)
 
     return ModuleSymbols(
-        symbols=tuple(symbol_visitor.symbols),
-        type_aliases=tuple(symbol_visitor.type_aliases),
+        symbols=tuple(visitor.symbols),
+        type_aliases=tuple(visitor.type_aliases),
         imports=tuple(imports.items()),
         imports_wildcard=wildcard_modules,
-        exports_explicit=exports_visitor.exports_explicit,
-        exports_explicit_dynamic=tuple(exports_visitor.all_sources),
+        exports_explicit=visitor.exports_explicit,
+        exports_explicit_dynamic=tuple(visitor.all_sources),
         exports_implicit=reexports,
-        ignore_comments=tuple(type_ignore_visitor.comments),
-        type_check_only=frozenset(symbol_visitor.type_check_only_names),
+        ignore_comments=tuple(visitor.ignore_comments),
+        type_check_only=frozenset(visitor.type_check_only_names),
     )
 
 

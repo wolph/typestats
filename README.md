@@ -70,8 +70,8 @@ Per-module (via `libcst`):
 - **`Annotated` unwrapping**: `Annotated[T, ...]` → `T`
   ([spec](https://typing.python.org/en/latest/spec/qualifiers.html#annotated))
 - **Aliased typing imports**: `import typing as t` resolved via a lightweight import map
-  (built from `GatherImportsVisitor` results), avoiding the expensive `QualifiedNameProvider` /
-  `ScopeProvider` pipeline
+  (built incrementally during the single-pass `libcst` visitor), avoiding the expensive
+  `QualifiedNameProvider` / `ScopeProvider` pipeline
 - **`Any` detection**: annotations that resolve to `typing.Any` (or `typing_extensions.Any`,
   `_typeshed.Incomplete`, `_typeshed.MaybeNone`, `_typeshed.sentinel`,
   `_typeshed.AnnotationForm`)—whether used directly, through local type aliases
