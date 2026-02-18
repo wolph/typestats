@@ -218,7 +218,7 @@ class TestModuleReport:
 class TestPackageReport:
     def _pkg(self, *symbols: Symbol) -> PackageReport:
         mod = ModuleReport.from_symbols("mod.py", list(symbols))
-        return PackageReport("pkg", (mod,))
+        return PackageReport("pkg", (mod,), "1.0.0")
 
     def test_coverage(self) -> None:
         r = self._pkg(Symbol("a", _INT), Symbol("b", ANY))
@@ -244,6 +244,7 @@ class TestPackageReport:
         r = PackageReport(
             "pkg",
             (mod,),
+            "1.0.0",
             typecheckers={
                 "mypy": {"strict": True},
                 "ty": {"python-version": "3.14"},

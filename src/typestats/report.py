@@ -207,6 +207,7 @@ class ModuleReport:
 class PackageReport:
     package: str
     module_reports: tuple[ModuleReport, ...]
+    version: str
     typecheckers: Mapping[TypeCheckerName, TypeCheckerConfigDict] = field(
         default_factory=dict[TypeCheckerName, TypeCheckerConfigDict],
     )
@@ -245,7 +246,7 @@ class PackageReport:
 
         typed = self.n_annotated + self.n_any
         print(  # noqa: T201
-            f"=> Total: {self.coverage():.1%} "
+            f"=> {self.package} {self.version}: {self.coverage():.1%} "
             f"({typed}/{self.n_annotatable} annotated, "
             f"{self.n_any} Any, {self.n_unannotated} missing)",
         )
@@ -258,6 +259,7 @@ class PackageReport:
         cls,
         pkg: str,
         path: StrPath,
+        version: str,
         /,
         *,
         stubs_path: StrPath | None = None,
@@ -312,12 +314,14 @@ class PackageReport:
             ModuleReport.from_symbols(_rel(src_path), syms)
             for src_path, syms in symbols.items()
         )
-        return cls(pkg, files, configs)
+        return cls(pkg, files, version, typecheckers=configs)
 
 
 @mainpy.main
 async def main() -> None:
     import re
+
+    from packaging.utils import parse_sdist_filename
 
     from typestats import _pypi
     from typestats._http import retry_client
@@ -329,18 +333,25 @@ async def main() -> None:
             if m := re.match(r"^(.+)-stubs$", package):
                 # Stubs package: download both base and stubs concurrently
                 base_name = m.group(1)
-                (base_path, _), (stubs_path, _) = await asyncio.gather(
+                (base_path, base_sdist), (stubs_path, _) = await asyncio.gather(
                     _pypi.download_sdist_latest(client, base_name, temp_dir),
                     _pypi.download_sdist_latest(client, package, temp_dir),
                 )
+                _, base_ver = parse_sdist_filename(base_sdist["filename"])
                 report = await PackageReport.from_path(
                     base_name,
                     base_path,
+                    str(base_ver),
                     stubs_path=stubs_path,
                 )
             else:
                 # Base package: analyze standalone
-                path, _ = await _pypi.download_sdist_latest(client, package, temp_dir)
-                report = await PackageReport.from_path(package, path)
+                path, sdist = await _pypi.download_sdist_latest(
+                    client,
+                    package,
+                    temp_dir,
+                )
+                _, ver = parse_sdist_filename(sdist["filename"])
+                report = await PackageReport.from_path(package, path, str(ver))
 
         report.print()
