@@ -661,3 +661,22 @@ def test_collect_public_symbols_type_ignores() -> None:
 
     kinds = {c.kind for c in comments}
     assert kinds == {"type", "pyright", "ty"}
+
+
+def test_collect_public_symbols_type_check_only_excluded() -> None:
+    """@type_check_only symbols are excluded unless explicitly in __all__."""
+    names = _public_symbol_names(_PROJECT)
+
+    # _Proto is @type_check_only but explicitly in __all__ → included
+    assert "tcopkg._Proto" in names
+
+    # visible() is not @type_check_only → included
+    assert "tcopkg.visible" in names
+
+    # public_func and PublicClass from mod are in __all__ → included
+    assert "tcopkg.mod.public_func" in names
+    assert "tcopkg.mod.PublicClass" in names
+
+    # _checker and _InternalProto are @type_check_only, not in __all__ → excluded
+    assert "tcopkg.mod._checker" not in names
+    assert "tcopkg.mod._InternalProto" not in names

@@ -469,6 +469,7 @@ async def collect_public_symbols(  # noqa: C901, PLR0912, PLR0914, PLR0915
         explicit: frozenset[str] | None = None
         dynamic: list[str] = []
         implicit: set[str] = set()
+        tco: set[str] = set()  # @type_check_only decorated names
 
         for syms in module_data.get(mod, {}).values():
             import_map.update(syms.imports)
@@ -477,6 +478,7 @@ async def collect_public_symbols(  # noqa: C901, PLR0912, PLR0914, PLR0915
                 explicit = syms.exports_explicit
             dynamic.extend(syms.exports_explicit_dynamic)
             implicit.update(syms.exports_implicit)
+            tco.update(syms.type_check_only)
 
         local = module_locals.get(mod, {})
 
@@ -497,6 +499,10 @@ async def collect_public_symbols(  # noqa: C901, PLR0912, PLR0914, PLR0915
             names = {n for n in {*local, *import_map} if _is_public(n) and n != "*"}
 
         names -= _MODULE_DUNDERS
+
+        # Exclude @type_check_only symbols unless explicitly in __all__
+        if tco:
+            names -= tco if explicit is None else tco - explicit
 
         result: dict[str, str] = {}
         for name in names:
