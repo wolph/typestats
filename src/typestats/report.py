@@ -3,14 +3,22 @@
 import asyncio
 import sys
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, NamedTuple, Protocol, Self, cast
+from pathlib import PurePosixPath
+from typing import TYPE_CHECKING, Annotated, Any, Literal, NamedTuple, Self, cast
 
 if TYPE_CHECKING:
     from _typeshed import StrPath
 
 import anyio
 import mainpy
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Discriminator,
+    Field,
+    NonNegativeInt,
+    computed_field,
+)
 
 from typestats import analyze
 from typestats.typecheckers import TypeCheckerConfigDict, TypeCheckerName
@@ -19,6 +27,11 @@ __all__ = "ClassReport", "FunctionReport", "ModuleReport", "NameReport", "Packag
 
 type _Symbols = Sequence[analyze.Symbol]
 type _Max1 = Literal[0, 1]
+
+type _AnySymbolReport = Annotated[
+    NameReport | FunctionReport | ClassReport,
+    Discriminator("kind"),
+]
 
 
 class _SlotState(NamedTuple):
@@ -40,33 +53,18 @@ class _SlotState(NamedTuple):
                 return cls(0, 0, 0)
 
 
-class _SymbolReport[SymbolT: analyze.TypeForm = Any](Protocol):
-    """Common interface for per-symbol reports."""
-
-    @property
-    def name(self) -> str: ...
-    @property
-    def n_annotatable(self) -> int: ...
-    @property
-    def n_annotated(self) -> int: ...
-    @property
-    def n_any(self) -> int: ...
-    @property
-    def n_unannotated(self) -> int: ...
-
-    @classmethod
-    def from_symbol(cls, name: str, ty: SymbolT, /) -> Self: ...
-
-
-@dataclass(frozen=True, slots=True)
-class NameReport:
+class NameReport(BaseModel):
     """Report for a module-level variable or constant (single slot)."""
 
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["name"] = "name"
     name: str
     n_annotated: _Max1
     n_any: _Max1
     n_unannotated: _Max1
 
+    @computed_field
     @property
     def n_annotatable(self) -> _Max1:
         return cast("_Max1", self.n_annotated + self.n_any + self.n_unannotated)
@@ -74,20 +72,28 @@ class NameReport:
     @classmethod
     def from_symbol(cls, name: str, ty: analyze.TypeForm, /) -> Self:
         s = _SlotState.of(ty)
-        return cls(name, s.annotated, s.any, s.unannotated)
+        return cls(
+            name=name,
+            n_annotated=s.annotated,
+            n_any=s.any,
+            n_unannotated=s.unannotated,
+        )
 
 
-@dataclass(frozen=True, slots=True)
-class FunctionReport:
+class FunctionReport(BaseModel):
     """Report for a function/method; counts individual param + return slots."""
 
-    name: str
-    n_annotated: int
-    n_any: int
-    n_unannotated: int
+    model_config = ConfigDict(frozen=True)
 
+    kind: Literal["function"] = "function"
+    name: str
+    n_annotated: NonNegativeInt
+    n_any: NonNegativeInt
+    n_unannotated: NonNegativeInt
+
+    @computed_field
     @property
-    def n_annotatable(self) -> int:
+    def n_annotatable(self) -> NonNegativeInt:
         return self.n_annotated + self.n_any + self.n_unannotated
 
     @classmethod
@@ -100,33 +106,44 @@ class FunctionReport:
                 any_ += s.any
                 unannotated += s.unannotated
 
-        return cls(name, annotated, any_, unannotated)
+        return cls(
+            name=name,
+            n_annotated=annotated,
+            n_any=any_,
+            n_unannotated=unannotated,
+        )
 
 
-@dataclass(frozen=True, slots=True)
-class ClassReport:
+class ClassReport(BaseModel):
     """Report for a class; aggregates its method reports.
 
     Class-level attributes are ignored (for now?).
     """
 
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["class"] = "class"
     name: str
     methods: tuple[FunctionReport, ...]
 
+    @computed_field
     @property
-    def n_annotatable(self) -> int:
+    def n_annotatable(self) -> NonNegativeInt:
         return sum(m.n_annotatable for m in self.methods)
 
+    @computed_field
     @property
-    def n_annotated(self) -> int:
+    def n_annotated(self) -> NonNegativeInt:
         return sum(m.n_annotated for m in self.methods)
 
+    @computed_field
     @property
-    def n_any(self) -> int:
+    def n_any(self) -> NonNegativeInt:
         return sum(m.n_any for m in self.methods)
 
+    @computed_field
     @property
-    def n_unannotated(self) -> int:
+    def n_unannotated(self) -> NonNegativeInt:
         return sum(m.n_unannotated for m in self.methods)
 
     @classmethod
@@ -136,14 +153,14 @@ class ClassReport:
             for member in class_.members
             if isinstance(member, analyze.Function)
         ]
-        return cls(name, tuple(methods))
+        return cls(name=name, methods=tuple(methods))
 
     @classmethod
     def from_symbol(cls, name: str, ty: analyze.Class, /) -> Self:
         return cls.from_class(name, ty)
 
 
-def _symbol_report(symbol: analyze.Symbol) -> _SymbolReport[Any]:
+def _symbol_report(symbol: analyze.Symbol) -> _AnySymbolReport:
     """Create the appropriate report for a symbol."""
     match symbol.type_:
         case analyze.Function():
@@ -154,37 +171,44 @@ def _symbol_report(symbol: analyze.Symbol) -> _SymbolReport[Any]:
             return NameReport.from_symbol(symbol.name, symbol.type_)
 
 
-@dataclass(frozen=True, slots=True)
-class ModuleReport:
-    path: anyio.Path
-    symbol_reports: tuple[_SymbolReport, ...]
+class ModuleReport(BaseModel):
+    model_config = ConfigDict(frozen=True)
 
+    path: str
+    symbol_reports: tuple[_AnySymbolReport, ...]
+
+    @computed_field
     @property
     def name(self) -> str:
         """Fully qualified module name."""
-        parts = self.path.with_suffix("").parts
+        parts = PurePosixPath(self.path).with_suffix("").parts
         if parts and parts[-1] == "__init__":
             parts = parts[:-1]
         return ".".join(parts)
 
+    @computed_field
     @property
     def names(self) -> frozenset[str]:
         return frozenset(s.name for s in self.symbol_reports)
 
+    @computed_field
     @property
-    def n_annotatable(self) -> int:
+    def n_annotatable(self) -> NonNegativeInt:
         return sum(s.n_annotatable for s in self.symbol_reports)
 
+    @computed_field
     @property
-    def n_annotated(self) -> int:
+    def n_annotated(self) -> NonNegativeInt:
         return sum(s.n_annotated for s in self.symbol_reports)
 
+    @computed_field
     @property
-    def n_any(self) -> int:
+    def n_any(self) -> NonNegativeInt:
         return sum(s.n_any for s in self.symbol_reports)
 
+    @computed_field
     @property
-    def n_unannotated(self) -> int:
+    def n_unannotated(self) -> NonNegativeInt:
         return sum(s.n_unannotated for s in self.symbol_reports)
 
     def coverage(self, strict: bool = False, /) -> float:
@@ -200,32 +224,40 @@ class ModuleReport:
 
     @classmethod
     def from_symbols(cls, path: StrPath, symbols: _Symbols) -> Self:
-        return cls(anyio.Path(path), tuple(_symbol_report(s) for s in symbols))
+        return cls(
+            path=anyio.Path(path).as_posix(),
+            symbol_reports=tuple(_symbol_report(s) for s in symbols),
+        )
 
 
-@dataclass(frozen=True, slots=True)
-class PackageReport:
+class PackageReport(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     package: str
     module_reports: tuple[ModuleReport, ...]
     version: str
-    typecheckers: Mapping[TypeCheckerName, TypeCheckerConfigDict] = field(
-        default_factory=dict[TypeCheckerName, TypeCheckerConfigDict],
+    typecheckers: dict[TypeCheckerName, TypeCheckerConfigDict] = Field(
+        default_factory=dict,
     )
 
+    @computed_field
     @property
-    def n_annotatable(self) -> int:
+    def n_annotatable(self) -> NonNegativeInt:
         return sum(m.n_annotatable for m in self.module_reports)
 
+    @computed_field
     @property
-    def n_annotated(self) -> int:
+    def n_annotated(self) -> NonNegativeInt:
         return sum(m.n_annotated for m in self.module_reports)
 
+    @computed_field
     @property
-    def n_any(self) -> int:
+    def n_any(self) -> NonNegativeInt:
         return sum(m.n_any for m in self.module_reports)
 
+    @computed_field
     @property
-    def n_unannotated(self) -> int:
+    def n_unannotated(self) -> NonNegativeInt:
         return sum(m.n_unannotated for m in self.module_reports)
 
     def coverage(self, strict: bool = False, /) -> float:
@@ -314,7 +346,12 @@ class PackageReport:
             ModuleReport.from_symbols(_rel(src_path), syms)
             for src_path, syms in symbols.items()
         )
-        return cls(pkg, files, version, typecheckers=configs)
+        return cls(
+            package=pkg,
+            module_reports=files,
+            version=version,
+            typecheckers=dict(configs),
+        )
 
 
 @mainpy.main

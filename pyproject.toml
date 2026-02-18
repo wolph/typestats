@@ -28,6 +28,7 @@ dependencies = [
   "httpx-retries>=0.4.6",
   "packaging>=26.0",
   "libcst>=1.8.6,<2", # like ast but preservers comments/formatting and other goodies
+  "pydantic>=2.12.5,<3",
   "ruff>=0.15.1",
 ]
 
@@ -118,6 +119,9 @@ ignore = [
   "TRY003", # tryceratops - raise-vanilla-args
   "RUF067", # ruff - non-empty-init-module
 ]
+
+[tool.ruff.lint.flake8-type-checking]
+runtime-evaluated-base-classes = ["pydantic.BaseModel"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/fixtures/**" = ["ALL"]
