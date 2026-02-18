@@ -385,10 +385,7 @@ class PackageReport(BaseModel):
     @computed_field
     @property
     def type_ignores(self) -> tuple[analyze.IgnoreComment, ...]:
-        result: tuple[analyze.IgnoreComment, ...] = ()
-        for m in self.module_reports:
-            result += m.type_ignores
-        return result
+        return tuple(ignore for m in self.module_reports for ignore in m.type_ignores)
 
     @computed_field
     @property
@@ -422,7 +419,7 @@ class PackageReport(BaseModel):
             f"{self.n_functions} functions ({self.n_function_overloads} overloads), "
             f"{self.n_methods} methods ({self.n_method_overloads} overloads), "
             f"{self.n_classes} classes, {self.n_names} names, "
-            f"{self.n_type_ignores} type-ignore comments",
+            f"{self.n_type_ignores} ignore comments",
         )
         if self.typecheckers:
             checkers = ", ".join(sorted(self.typecheckers))
@@ -478,10 +475,11 @@ class PackageReport(BaseModel):
         if stubs_path is not None:
             stubs_pub: PublicSymbols = results[2]
             symbols = merge_stubs_overlay(pub.symbols, stubs_pub.symbols)
-            # Merge type-ignore comments from both
-            type_ignores = dict(pub.type_ignores)
-            for p, comments in stubs_pub.type_ignores.items():
-                type_ignores[p] = type_ignores.get(p, ()) + comments
+            # Only include ignore comments from the effective file per
+            # module: stubs comments for stubs-covered modules, original
+            # comments for uncovered modules.  Paths are absolute and
+            # never collide between the two packages.
+            type_ignores = {**pub.type_ignores, **stubs_pub.type_ignores}
         else:
             symbols = pub.symbols
             type_ignores = pub.type_ignores

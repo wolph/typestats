@@ -643,3 +643,21 @@ def test_merge_stubs_overlay_count_invariant() -> None:
 
     n_orig, n_merged = anyio.run(_run)
     assert n_orig <= n_merged
+
+
+def test_collect_public_symbols_type_ignores() -> None:
+    """Type-ignore / type-checker ignore comments are collected per path."""
+
+    async def _run() -> dict[str, tuple[analyze.IgnoreComment, ...]]:
+        pub = await collect_public_symbols(_PROJECT)
+        return {p.name: comments for p, comments in pub.type_ignores.items()}
+
+    ignores = anyio.run(_run)
+
+    # ignorepkg/core.py has 3 ignore comments
+    assert "core.py" in ignores
+    comments = ignores["core.py"]
+    assert len(comments) == 3
+
+    kinds = {c.kind for c in comments}
+    assert kinds == {"type", "pyright", "ty"}

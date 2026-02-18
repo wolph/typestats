@@ -9,6 +9,7 @@ from typestats.analyze import (
     Class,
     Expr,
     Function,
+    IgnoreComment,
     Overload,
     Param,
     ParamKind,
@@ -283,6 +284,20 @@ class TestModuleReport:
         m = ModuleReport(path="m.py", symbol_reports=())
         assert m.coverage() == pytest.approx(0)
 
+    def test_type_ignores_default_empty(self) -> None:
+        m = ModuleReport(path="m.py", symbol_reports=())
+        assert m.type_ignores == ()
+        assert m.n_type_ignores == 0
+
+    def test_type_ignores_from_symbols(self) -> None:
+        comments = (
+            IgnoreComment("type", frozenset({"assignment"})),
+            IgnoreComment("pyright", None),
+        )
+        m = ModuleReport.from_symbols("m.py", [], type_ignores=comments)
+        assert m.type_ignores == comments
+        assert m.n_type_ignores == 2
+
 
 class TestPackageReport:
     def _pkg(self, *symbols: Symbol) -> PackageReport:
@@ -334,3 +349,17 @@ class TestPackageReport:
         assert len(r.typecheckers) == 2
         assert "mypy" in r.typecheckers
         assert "ty" in r.typecheckers
+
+    def test_type_ignores_aggregation(self) -> None:
+        c1 = IgnoreComment("type", frozenset({"assignment"}))
+        c2 = IgnoreComment("pyright", None)
+        c3 = IgnoreComment("ty", frozenset({"deprecated"}))
+        m1 = ModuleReport.from_symbols("a.py", [], type_ignores=(c1, c2))
+        m2 = ModuleReport.from_symbols("b.py", [], type_ignores=(c3,))
+        r = PackageReport(
+            package="pkg",
+            module_reports=(m1, m2),
+            version="1.0.0",
+        )
+        assert r.n_type_ignores == 3
+        assert r.type_ignores == (c1, c2, c3)
