@@ -1,6 +1,7 @@
 import textwrap
 
 import libcst as cst
+import pytest
 
 from typestats.analyze import (
     ANY,
@@ -13,6 +14,7 @@ from typestats.analyze import (
     Overload,
     Param,
     ParamKind,
+    TypeForm,
     annotation_counts,
     collect_symbols,
     is_annotated,
@@ -350,160 +352,149 @@ class TestStringAnnotations:
 
 
 class TestKnownAttrs:
-    def test_enum_members(self) -> None:
-        src = textwrap.dedent("""
-        from enum import Enum
+    @pytest.mark.parametrize(
+        ("src", "expected_known"),
+        [
+            (
+                """\
+                from enum import Enum
 
-        class Color(Enum):
-            RED = 1
-            BLUE = 2
-        """)
-        module = collect_symbols(src)
-        symbols = {symbol.name: symbol.type_ for symbol in module.symbols}
+                class Color(Enum):
+                    RED = 1
+                    BLUE = 2
+                """,
+                {"Color.RED", "Color.BLUE"},
+            ),
+            (
+                """\
+                from enum import Enum as MyEnum
 
-        assert symbols["Color.RED"] is KNOWN
-        assert symbols["Color.BLUE"] is KNOWN
+                class Status(MyEnum):
+                    READY = 1
+                """,
+                {"Status.READY"},
+            ),
+            (
+                """\
+                from dataclasses import dataclass
 
-    def test_enum_members_with_alias(self) -> None:
-        src = textwrap.dedent("""
-        from enum import Enum as MyEnum
+                @dataclass
+                class Point:
+                    x: int
+                    y: float
+                """,
+                {"Point.x", "Point.y"},
+            ),
+            (
+                """\
+                from dataclasses import dataclass
 
-        class Status(MyEnum):
-            READY = 1
-        """)
-        module = collect_symbols(src)
-        symbols = {symbol.name: symbol.type_ for symbol in module.symbols}
+                @dataclass(frozen=True)
+                class Point:
+                    x: int
+                    y: float
+                """,
+                {"Point.x", "Point.y"},
+            ),
+            (
+                """\
+                import dataclasses
 
-        assert symbols["Status.READY"] is KNOWN
+                @dataclasses.dataclass
+                class Point:
+                    x: int
+                """,
+                {"Point.x"},
+            ),
+            (
+                """\
+                from typing import NamedTuple
 
-    def test_dataclass_attrs(self) -> None:
-        src = textwrap.dedent("""
-        from dataclasses import dataclass
+                class Coord(NamedTuple):
+                    x: int
+                    y: int
+                """,
+                {"Coord.x", "Coord.y"},
+            ),
+            (
+                """\
+                from typing import TypedDict
 
-        @dataclass
-        class Point:
-            x: int
-            y: float
-        """)
-        module = collect_symbols(src)
+                class Config(TypedDict):
+                    name: str
+                    value: int
+                """,
+                {"Config.name", "Config.value"},
+            ),
+            (
+                """\
+                import typing
+
+                class Config(typing.TypedDict):
+                    name: str
+                """,
+                {"Config.name"},
+            ),
+        ],
+        ids=[
+            "enum_members",
+            "enum_alias",
+            "dataclass",
+            "dataclass_call",
+            "dataclass_dotted",
+            "namedtuple",
+            "typeddict",
+            "typeddict_alias",
+        ],
+    )
+    def test_known_attrs(self, src: str, expected_known: set[str]) -> None:
+        module = collect_symbols(textwrap.dedent(src))
         symbols = {s.name: s.type_ for s in module.symbols}
+        for name in expected_known:
+            assert symbols[name] is KNOWN
 
-        assert symbols["Point.x"] is KNOWN
-        assert symbols["Point.y"] is KNOWN
+    @pytest.mark.parametrize(
+        ("src", "class_name"),
+        [
+            (
+                """\
+                from dataclasses import dataclass
 
-    def test_dataclass_call_attrs(self) -> None:
-        src = textwrap.dedent("""
-        from dataclasses import dataclass
+                @dataclass
+                class Point:
+                    x: int
+                    y: float
+                """,
+                "Point",
+            ),
+            (
+                """\
+                from typing import NamedTuple
 
-        @dataclass(frozen=True)
-        class Point:
-            x: int
-            y: float
-        """)
-        module = collect_symbols(src)
+                class Coord(NamedTuple):
+                    x: int
+                    y: int
+                """,
+                "Coord",
+            ),
+            (
+                """\
+                from enum import Enum
+
+                class Color(Enum):
+                    RED = 1
+                    BLUE = 2
+                """,
+                "Color",
+            ),
+        ],
+        ids=["dataclass", "namedtuple", "enum"],
+    )
+    def test_known_class_is_annotated(self, src: str, class_name: str) -> None:
+        module = collect_symbols(textwrap.dedent(src))
         symbols = {s.name: s.type_ for s in module.symbols}
-
-        assert symbols["Point.x"] is KNOWN
-        assert symbols["Point.y"] is KNOWN
-
-    def test_dataclass_alias_attrs(self) -> None:
-        src = textwrap.dedent("""
-        import dataclasses
-
-        @dataclasses.dataclass
-        class Point:
-            x: int
-        """)
-        module = collect_symbols(src)
-        symbols = {s.name: s.type_ for s in module.symbols}
-
-        assert symbols["Point.x"] is KNOWN
-
-    def test_namedtuple_attrs(self) -> None:
-        src = textwrap.dedent("""
-        from typing import NamedTuple
-
-        class Coord(NamedTuple):
-            x: int
-            y: int
-        """)
-        module = collect_symbols(src)
-        symbols = {s.name: s.type_ for s in module.symbols}
-
-        assert symbols["Coord.x"] is KNOWN
-        assert symbols["Coord.y"] is KNOWN
-
-    def test_typeddict_attrs(self) -> None:
-        src = textwrap.dedent("""
-        from typing import TypedDict
-
-        class Config(TypedDict):
-            name: str
-            value: int
-        """)
-        module = collect_symbols(src)
-        symbols = {s.name: s.type_ for s in module.symbols}
-
-        assert symbols["Config.name"] is KNOWN
-        assert symbols["Config.value"] is KNOWN
-
-    def test_typeddict_alias_attrs(self) -> None:
-        src = textwrap.dedent("""
-        import typing
-
-        class Config(typing.TypedDict):
-            name: str
-        """)
-        module = collect_symbols(src)
-        symbols = {s.name: s.type_ for s in module.symbols}
-
-        assert symbols["Config.name"] is KNOWN
-
-    def test_dataclass_is_annotated(self) -> None:
-        """A dataclass with annotated fields should be considered annotated."""
-        src = textwrap.dedent("""
-        from dataclasses import dataclass
-
-        @dataclass
-        class Point:
-            x: int
-            y: float
-        """)
-        module = collect_symbols(src)
-        symbols = {s.name: s.type_ for s in module.symbols}
-
-        assert isinstance(symbols["Point"], Class)
-        assert is_annotated(symbols["Point"])
-
-    def test_namedtuple_is_annotated(self) -> None:
-        """A NamedTuple with annotated fields should be considered annotated."""
-        src = textwrap.dedent("""
-        from typing import NamedTuple
-
-        class Coord(NamedTuple):
-            x: int
-            y: int
-        """)
-        module = collect_symbols(src)
-        symbols = {s.name: s.type_ for s in module.symbols}
-
-        assert isinstance(symbols["Coord"], Class)
-        assert is_annotated(symbols["Coord"])
-
-    def test_enum_is_annotated(self) -> None:
-        """An enum with KNOWN members should be considered annotated."""
-        src = textwrap.dedent("""
-        from enum import Enum
-
-        class Color(Enum):
-            RED = 1
-            BLUE = 2
-        """)
-        module = collect_symbols(src)
-        symbols = {s.name: s.type_ for s in module.symbols}
-
-        assert isinstance(symbols["Color"], Class)
-        assert is_annotated(symbols["Color"])
+        assert isinstance(symbols[class_name], Class)
+        assert is_annotated(symbols[class_name])
 
     def test_regular_class_attrs_not_known(self) -> None:
         """Annotated attrs in plain classes should keep their type expression."""
@@ -547,57 +538,51 @@ class TestKnownAttrs:
         assert isinstance(cls, Class)
         assert not is_annotated(cls)
 
-    def test_slots_excluded_from_members(self) -> None:
-        """__slots__ should not appear as a class member or symbol."""
-        src = textwrap.dedent("""
-        class AxisError(ValueError, IndexError):
-            __slots__ = "_msg", "axis", "ndim"
+    @pytest.mark.parametrize(
+        ("src", "class_name", "n_members"),
+        [
+            (
+                """\
+                class AxisError(ValueError, IndexError):
+                    __slots__ = "_msg", "axis", "ndim"
 
-            axis: int | None
-            ndim: int | None
-        """)
-        module = collect_symbols(src)
+                    axis: int | None
+                    ndim: int | None
+                """,
+                "AxisError",
+                2,
+            ),
+            (
+                """\
+                class Foo:
+                    __slots__ = ["x", "y"]
+
+                    x: int
+                    y: str
+                """,
+                "Foo",
+                2,
+            ),
+            (
+                """\
+                class Bar:
+                    __slots__: tuple[str, ...] = ("a",)
+
+                    a: int
+                """,
+                "Bar",
+                1,
+            ),
+        ],
+        ids=["tuple_assign", "list_assign", "annotated_assign"],
+    )
+    def test_slots_excluded(self, src: str, class_name: str, n_members: int) -> None:
+        module = collect_symbols(textwrap.dedent(src))
         symbols = {s.name: s.type_ for s in module.symbols}
-
-        assert "AxisError.__slots__" not in symbols
-        cls = symbols["AxisError"]
+        assert f"{class_name}.__slots__" not in symbols
+        cls = symbols[class_name]
         assert isinstance(cls, Class)
-        assert len(cls.members) == 2
-        assert is_annotated(cls)
-
-    def test_slots_list_excluded(self) -> None:
-        """__slots__ as a list should also be excluded."""
-        src = textwrap.dedent("""
-        class Foo:
-            __slots__ = ["x", "y"]
-
-            x: int
-            y: str
-        """)
-        module = collect_symbols(src)
-        symbols = {s.name: s.type_ for s in module.symbols}
-
-        assert "Foo.__slots__" not in symbols
-        cls = symbols["Foo"]
-        assert isinstance(cls, Class)
-        assert len(cls.members) == 2
-
-    def test_annotated_slots_excluded(self) -> None:
-        """Annotated __slots__ (e.g. `__slots__: tuple[str, ...] = (...)`) should
-        also be excluded."""
-        src = textwrap.dedent("""
-        class Bar:
-            __slots__: tuple[str, ...] = ("a",)
-
-            a: int
-        """)
-        module = collect_symbols(src)
-        symbols = {s.name: s.type_ for s in module.symbols}
-
-        assert "Bar.__slots__" not in symbols
-        cls = symbols["Bar"]
-        assert isinstance(cls, Class)
-        assert len(cls.members) == 1
+        assert len(cls.members) == n_members
 
 
 class TestClassMethodAlias:
@@ -847,68 +832,45 @@ class TestImplicitClassmethodDunders:
     """__new__, __init_subclass__, __class_getitem__, and regular methods
     should all have their self/cls parameter excluded from the param list."""
 
-    def test_new_cls_excluded(self) -> None:
-        src = textwrap.dedent("""
-        class Foo:
-            def __new__(cls): ...
-        """)
+    @pytest.mark.parametrize(
+        ("src", "method_name", "n_params"),
+        [
+            ("class Foo:\n    def __new__(cls): ...", "Foo.__new__", 0),
+            (
+                "class Foo:\n    def __init_subclass__(cls): ...",
+                "Foo.__init_subclass__",
+                0,
+            ),
+            (
+                "class Foo:\n    def __class_getitem__(cls, item): ...",
+                "Foo.__class_getitem__",
+                1,
+            ),
+            ("class Foo:\n    def bar(self): ...", "Foo.bar", 0),
+        ],
+        ids=["__new__", "__init_subclass__", "__class_getitem__", "regular_method"],
+    )
+    def test_self_cls_excluded(self, src: str, method_name: str, n_params: int) -> None:
         module = collect_symbols(src)
-        func = next(s.type_ for s in module.symbols if s.name == "Foo.__new__")
+        func = next(s.type_ for s in module.symbols if s.name == method_name)
         assert isinstance(func, Function)
-        assert func.overloads[0].params == ()
-
-    def test_init_subclass_cls_excluded(self) -> None:
-        src = textwrap.dedent("""
-        class Foo:
-            def __init_subclass__(cls): ...
-        """)
-        module = collect_symbols(src)
-        func = next(
-            s.type_ for s in module.symbols if s.name == "Foo.__init_subclass__"
-        )
-        assert isinstance(func, Function)
-        assert func.overloads[0].params == ()
-
-    def test_class_getitem_cls_excluded(self) -> None:
-        src = textwrap.dedent("""
-        class Foo:
-            def __class_getitem__(cls, item): ...
-        """)
-        module = collect_symbols(src)
-        func = next(
-            s.type_ for s in module.symbols if s.name == "Foo.__class_getitem__"
-        )
-        assert isinstance(func, Function)
-        assert len(func.overloads[0].params) == 1
-        assert func.overloads[0].params[0].name == "item"
-
-    def test_regular_method_self_excluded(self) -> None:
-        """Regular methods should have self excluded."""
-        src = textwrap.dedent("""
-        class Foo:
-            def bar(self): ...
-        """)
-        module = collect_symbols(src)
-        func = next(s.type_ for s in module.symbols if s.name == "Foo.bar")
-        assert isinstance(func, Function)
-        assert func.overloads[0].params == ()
+        assert len(func.overloads[0].params) == n_params
 
 
 class TestAnnotationCounts:
-    def test_unknown(self) -> None:
-        assert annotation_counts(UNKNOWN) == (0, 1)
-
-    def test_any(self) -> None:
-        assert annotation_counts(ANY) == (1, 1)
-
-    def test_known(self) -> None:
-        assert annotation_counts(KNOWN) == (0, 0)
-
-    def test_external(self) -> None:
-        assert annotation_counts(EXTERNAL) == (0, 0)
-
-    def test_expr(self) -> None:
-        assert annotation_counts(Expr(cst.Name("int"))) == (1, 1)
+    @pytest.mark.parametrize(
+        ("typeform", "expected"),
+        [
+            (UNKNOWN, (0, 1)),
+            (ANY, (1, 1)),
+            (KNOWN, (0, 0)),
+            (EXTERNAL, (0, 0)),
+            (Expr(cst.Name("int")), (1, 1)),
+        ],
+        ids=["unknown", "any", "known", "external", "expr"],
+    )
+    def test_simple(self, typeform: TypeForm, expected: tuple[int, int]) -> None:
+        assert annotation_counts(typeform) == expected
 
     def test_function_fully_annotated(self) -> None:
         func = Function(
