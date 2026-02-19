@@ -12,7 +12,6 @@ from libcst.helpers import (
     get_absolute_module_from_package_for_import,
     get_full_name_for_node,
 )
-from packaging.version import Version
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Collection
@@ -56,7 +55,7 @@ _ALL: Final = "__all__"
 type TypeForm = _TypeMarker | Expr | Function | Property | Class
 
 
-def _parse_version_tuple(node: cst.BaseExpression) -> Version | None:
+def _parse_version_tuple(node: cst.BaseExpression) -> tuple[int, ...] | None:
     """Extract a version like ``(3, 11)`` from a CST tuple literal."""
     if not isinstance(node, cst.Tuple):
         return None
@@ -69,172 +68,7 @@ def _parse_version_tuple(node: cst.BaseExpression) -> Version | None:
                 return None
     if not parts:
         return None
-    return Version(".".join(parts))
-
-
-class _VersionGuardTransformer(cst.CSTTransformer):
-    """Remove version-guarded branches that don't match the target Python version.
-
-    Gathers imports during traversal (via ``visit_Import`` /
-    ``visit_ImportFrom``) so it can resolve ``sys.version_info`` references
-    without a separate imports pass or the expensive
-    ``QualifiedNameProvider`` / ``ScopeProvider`` pipeline.
-    Only ``>=`` and ``<`` comparisons are supported (the only operators recommended
-    by the typing spec and enforced by ruff).
-    """
-
-    _imports: dict[str, str]
-    _package_name: str
-    _elif_ids: set[cst.If]
-    _guard_results: dict[cst.If, bool]
-
-    def __init__(self, package_name: str = "") -> None:
-        super().__init__()
-        self._imports = {}
-        self._package_name = package_name
-        self._elif_ids = set()
-        self._guard_results = {}
-
-    @override
-    def visit_Import(self, node: cst.Import) -> bool:
-        if isinstance(node.names, cst.ImportStar):
-            return False
-        for alias in node.names:
-            name = get_full_name_for_node(alias.name)
-            if name is None:
-                continue
-            if alias.asname and isinstance(alias.asname.name, cst.Name):
-                self._imports[alias.asname.name.value] = name
-            else:
-                # `import a.b.c` binds the top-level name `a`
-                top_level = name.split(".", 1)[0]
-                self._imports[top_level] = top_level
-        return False
-
-    @override
-    def visit_ImportFrom(self, node: cst.ImportFrom) -> bool:
-        if isinstance(node.names, cst.ImportStar):
-            return False
-        module = get_absolute_module_from_package_for_import(
-            self._package_name or None,
-            node,
-        )
-        if module is None:
-            return False
-        for alias in node.names:
-            obj_name = alias.name.value if isinstance(alias.name, cst.Name) else None
-            if obj_name is None:
-                continue
-            fqn = f"{module}.{obj_name}"
-            if alias.asname and isinstance(alias.asname.name, cst.Name):
-                self._imports[alias.asname.name.value] = fqn
-            else:
-                self._imports[obj_name] = fqn
-        return False
-
-    def _resolve_name(self, node: cst.CSTNode) -> str | None:
-        """Resolve a CST node to its fully qualified name using the import map."""
-        if (raw := get_full_name_for_node(node)) is None:
-            return None
-
-        first, _, rest = raw.partition(".")
-        if fqn := self._imports.get(first):
-            return f"{fqn}.{rest}" if rest else fqn
-        return raw
-
-    def _is_version_info(self, node: cst.BaseExpression) -> bool:
-        """Check if *node* represents ``sys.version_info``."""
-        if isinstance(node, cst.Subscript):
-            if self._resolve_name(node.value) == "sys.version_info":
-                _logger.debug("subscripted sys.version_info is not supported")
-            return False
-        return self._resolve_name(node) == "sys.version_info"
-
-    def _eval_version_guard(self, test: cst.BaseExpression) -> bool | None:
-        """Evaluate a ``sys.version_info`` comparison against the target version.
-
-        Only ``>=`` and ``<`` are supported.  Returns ``True``/``False`` when the
-        comparison can be resolved, ``None`` otherwise.
-        """
-        if not isinstance(test, cst.Comparison) or len(test.comparisons) != 1:
-            return None
-
-        cmp = test.comparisons[0]
-        if not self._is_version_info(test.left):
-            return None
-
-        version = _parse_version_tuple(cmp.comparator)
-        if version is None:
-            return None
-
-        match cmp.operator:
-            case cst.GreaterThanEqual():
-                return _TARGET_VERSION >= version  # noqa: SIM300
-            case cst.LessThan():
-                return _TARGET_VERSION < version  # noqa: SIM300
-            case _:
-                _logger.debug(
-                    "unsupported version_info operator: %s",
-                    type(cmp.operator).__name__,
-                )
-                return None
-
-    @override
-    def visit_If(self, node: cst.If) -> bool:
-        if isinstance(node.orelse, cst.If):
-            self._elif_ids.add(node.orelse)
-        # Evaluate now while we have original nodes (metadata is keyed to them).
-        result = self._eval_version_guard(node.test)
-        if result is not None:
-            self._guard_results[node] = result
-        return True
-
-    @override
-    def leave_If(
-        self,
-        original_node: cst.If,
-        updated_node: cst.If,
-    ) -> cst.If | cst.FlattenSentinel[cst.BaseStatement] | cst.RemovalSentinel:
-        if original_node in self._elif_ids:
-            self._elif_ids.discard(original_node)
-            return updated_node
-
-        return self._resolve_chain(original_node, updated_node)
-
-    @staticmethod
-    def _flatten_body(
-        body: cst.BaseSuite,
-    ) -> cst.FlattenSentinel[cst.BaseStatement]:
-        if isinstance(body, cst.IndentedBlock):
-            return cst.FlattenSentinel(body.body)
-
-        # SimpleStatementSuite (e.g. ``if ...: pass``)
-        assert isinstance(body, cst.SimpleStatementSuite)
-        line = cst.SimpleStatementLine(body.body)
-        return cst.FlattenSentinel([line])
-
-    def _resolve_chain(
-        self,
-        original: cst.If,
-        updated: cst.If,
-    ) -> cst.If | cst.FlattenSentinel[cst.BaseStatement] | cst.RemovalSentinel:
-        result = self._guard_results.get(original)
-        if result is None:
-            return updated
-
-        if result:
-            return self._flatten_body(updated.body)
-
-        if updated.orelse is None:
-            return cst.RemovalSentinel.REMOVE
-
-        if isinstance(updated.orelse, cst.Else):
-            return self._flatten_body(updated.orelse.body)
-
-        # elif chain: recurse into the next branch.
-        assert isinstance(updated.orelse, cst.If)
-        assert isinstance(original.orelse, cst.If)
-        return self._resolve_chain(original.orelse, updated.orelse)
+    return tuple(int(p) for p in parts)
 
 
 class ParamKind(StrEnum):
@@ -667,6 +501,9 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
         self._property_map = {}
         self._added_functions = set()
 
+        self._version_guard_results: dict[cst.If, bool] = {}
+        self._skip_depth: int = 0
+
         self._package_name = package_name
 
     @property
@@ -687,6 +524,43 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
         if fqn := self.imports.get(first):
             return f"{fqn}.{rest}" if rest else fqn
         return raw
+
+    def _is_version_info(self, node: cst.BaseExpression) -> bool:
+        """Check if *node* represents ``sys.version_info``."""
+        if isinstance(node, cst.Subscript):
+            if self._resolve_name(node.value) == "sys.version_info":
+                _logger.debug("subscripted sys.version_info is not supported")
+            return False
+        return self._resolve_name(node) == "sys.version_info"
+
+    def _eval_version_guard(self, test: cst.BaseExpression) -> bool | None:
+        """Evaluate a ``sys.version_info`` comparison against the target version.
+
+        Only ``>=`` and ``<`` are supported.  Returns ``True``/``False`` when the
+        comparison can be resolved, ``None`` otherwise.
+        """
+        if not isinstance(test, cst.Comparison) or len(test.comparisons) != 1:
+            return None
+
+        cmp = test.comparisons[0]
+        if not self._is_version_info(test.left):
+            return None
+
+        version = _parse_version_tuple(cmp.comparator)
+        if version is None:
+            return None
+
+        match cmp.operator:
+            case cst.GreaterThanEqual():
+                return _TARGET_VERSION >= version  # noqa: SIM300
+            case cst.LessThan():
+                return _TARGET_VERSION < version  # noqa: SIM300
+            case _:
+                _logger.debug(
+                    "unsupported version_info operator: %s",
+                    type(cmp.operator).__name__,
+                )
+                return None
 
     def _symbol_name(self, node: cst.Name) -> str:
         name = node.value
@@ -927,6 +801,8 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
 
     @override
     def visit_TrailingWhitespace(self, node: cst.TrailingWhitespace) -> bool:
+        if self._skip_depth > 0:
+            return False
         if node.comment is not None:
             for match in self._TYPE_IGNORE_RE.finditer(node.comment.value):
                 rules = match.group(2)
@@ -935,10 +811,39 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
                 self.ignore_comments.append(IgnoreComment(match.group(1), rules))
         return False
 
+    # --- Version guard handling ---
+
+    @override
+    def visit_If(self, node: cst.If) -> bool:
+        if self._skip_depth > 0:
+            return True  # still visit so field hooks fire
+        result = self._eval_version_guard(node.test)
+        if result is not None:
+            self._version_guard_results[node] = result
+        return True
+
+    def visit_If_body(self, node: cst.If) -> None:  # noqa: N802
+        if self._version_guard_results.get(node) is False:
+            self._skip_depth += 1  # body is dead branch
+
+    def leave_If_body(self, node: cst.If) -> None:  # noqa: N802
+        if self._version_guard_results.get(node) is False:
+            self._skip_depth -= 1
+
+    def visit_If_orelse(self, node: cst.If) -> None:  # noqa: N802
+        if self._version_guard_results.get(node) is True:
+            self._skip_depth += 1  # orelse is dead branch
+
+    def leave_If_orelse(self, node: cst.If) -> None:  # noqa: N802
+        if self._version_guard_results.get(node) is True:
+            self._skip_depth -= 1
+
     # --- Symbol handling ---
 
     @override
     def visit_ClassDef(self, node: cst.ClassDef) -> bool:
+        if self._skip_depth > 0:
+            return False
         if self._function_depth:
             self._skipped_class_depth += 1
         else:
@@ -976,6 +881,8 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
 
     @override
     def visit_FunctionDef(self, node: cst.FunctionDef) -> bool:
+        if self._skip_depth > 0:
+            return False
         if self._function_depth == 0:
             self._handle_function_def(node)
 
@@ -1241,6 +1148,8 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
 
     @override
     def visit_TypeAlias(self, node: cst.TypeAlias) -> None:
+        if self._skip_depth > 0:
+            return
         if not self._function_depth:
             self._add_type_aliases([node.name], node.value)
 
@@ -1269,11 +1178,7 @@ def collect_symbols(
 
     module = cst.parse_module(source)
 
-    # Pass 1: Remove version-guarded branches.
-    # The transformer gathers imports during traversal for name resolution.
-    module = module.visit(_VersionGuardTransformer(package_name or ""))
-
-    # Pass 2: Collect symbols, imports, exports, and comments.
+    # Single pass: collects symbols AND evaluates version guards.
     visitor = _SymbolVisitor(package_name=package_name or "")
     module.visit(visitor)  # type: ignore[arg-type]  # CSTVisitor is accepted at runtime
 
