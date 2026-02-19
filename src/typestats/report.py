@@ -2,7 +2,7 @@
 
 import asyncio
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Annotated, Any, Literal, NamedTuple, Self, cast
 
@@ -21,6 +21,7 @@ from pydantic import (
 )
 
 from typestats import analyze
+from typestats.index import PyTyped
 from typestats.typecheckers import TypeCheckerConfigDict, TypeCheckerName
 
 __all__ = "ClassReport", "FunctionReport", "ModuleReport", "NameReport", "PackageReport"
@@ -321,8 +322,9 @@ class PackageReport(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     package: str
-    module_reports: tuple[ModuleReport, ...]
     version: str
+    py_typed: PyTyped
+    module_reports: tuple[ModuleReport, ...]
     typecheckers: dict[TypeCheckerName, TypeCheckerConfigDict] = Field(
         default_factory=dict,
     )
@@ -421,6 +423,7 @@ class PackageReport(BaseModel):
             f"{self.n_classes} classes, {self.n_names} names, "
             f"{self.n_type_ignores} ignore comments",
         )
+        print(f"   py.typed: {self.py_typed.name}")  # noqa: T201
         if self.typecheckers:
             checkers = ", ".join(sorted(self.typecheckers))
             print(f"   Type-checkers: {checkers}")  # noqa: T201
@@ -456,14 +459,15 @@ class PackageReport(BaseModel):
         from typestats.typecheckers import discover_configs
 
         coros: list[Any] = [
+            discover_configs(stubs_path or path),
             collect_public_symbols(
                 path,
                 trace_origins=stubs_path is None,
                 package_name=pkg,
             ),
-            discover_configs(stubs_path or path),
         ]
         if stubs_path is not None:
+            stubs_path = anyio.Path(stubs_path)
             coros.append(
                 collect_public_symbols(
                     stubs_path,
@@ -472,40 +476,31 @@ class PackageReport(BaseModel):
                 ),
             )
 
-        results: list[Any] = await asyncio.gather(*coros)
-        from typestats.index import PublicSymbols
-
-        pub: PublicSymbols = results[0]
-        configs: Mapping[TypeCheckerName, TypeCheckerConfigDict] = results[1]
+        res: list[Any] = await asyncio.gather(*coros)
+        py_typed = res[-1].py_typed
 
         if stubs_path is not None:
-            stubs_pub: PublicSymbols = results[2]
-            symbols = merge_stubs_overlay(pub.symbols, stubs_pub.symbols)
-            # Keep only ignore comments for paths present in the merged
-            # symbols: stubs comments for stubs-covered modules, original
-            # comments for uncovered modules.
+            symbols = merge_stubs_overlay(res[1].symbols, res[2].symbols)
+            # Keep only ignore comments for paths present in the merged symbols:
+            # stubs comments for stubs-covered modules, original comments for uncovered
+            # modules.
+            ignores_orig, ignores_stubs = res[1].type_ignores, res[2].type_ignores
             type_ignores = {
-                src_path: stubs_pub.type_ignores.get(
-                    src_path,
-                    pub.type_ignores.get(src_path, ()),
-                )
-                for src_path in symbols
+                p: ignores_stubs[p] if p in ignores_stubs else ignores_orig.get(p, ())
+                for p in symbols
             }
         else:
-            symbols = pub.symbols
-            type_ignores = pub.type_ignores
+            symbols, type_ignores = res[1].symbols, res[1].type_ignores
 
-        stubs_p = anyio.Path(stubs_path) if stubs_path is not None else None
-
-        def _rel(src: anyio.Path) -> anyio.Path:
+        def _relpath(src: anyio.Path) -> anyio.Path:
             try:
-                return src.relative_to(stubs_p or path)
+                return src.relative_to(stubs_path or path)
             except ValueError:
                 return src.relative_to(path)
 
         files = tuple(
             ModuleReport.from_symbols(
-                _rel(src_path),
+                _relpath(src_path),
                 syms,
                 type_ignores=type_ignores.get(src_path, ()),
             )
@@ -515,7 +510,8 @@ class PackageReport(BaseModel):
             package=project or pkg,
             module_reports=files,
             version=version,
-            typecheckers=dict(configs),
+            py_typed=py_typed,
+            typecheckers=dict(res[0]),
         )
 
 

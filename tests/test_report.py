@@ -20,6 +20,7 @@ from typestats.analyze import (
     Symbol,
     TypeForm,
 )
+from typestats.index import PyTyped
 from typestats.report import (
     ClassReport,
     FunctionReport,
@@ -308,7 +309,12 @@ class TestModuleReport:
 class TestPackageReport:
     def _pkg(self, *symbols: Symbol) -> PackageReport:
         mod = ModuleReport.from_symbols("mod.py", list(symbols))
-        return PackageReport(package="pkg", module_reports=(mod,), version="1.0.0")
+        return PackageReport(
+            package="pkg",
+            module_reports=(mod,),
+            version="1.0.0",
+            py_typed=PyTyped.YES,
+        )
 
     def test_coverage(self) -> None:
         r = self._pkg(Symbol("a", _INT), Symbol("b", ANY))
@@ -347,6 +353,7 @@ class TestPackageReport:
             package="pkg",
             module_reports=(mod,),
             version="1.0.0",
+            py_typed=PyTyped.YES,
             typecheckers={
                 "mypy": {"strict": True},
                 "ty": {"python-version": "3.14"},
@@ -366,6 +373,7 @@ class TestPackageReport:
             package="pkg",
             module_reports=(m1, m2),
             version="1.0.0",
+            py_typed=PyTyped.YES,
         )
         assert r.n_type_ignores == 3
         assert r.type_ignores == (c1, c2, c3)
