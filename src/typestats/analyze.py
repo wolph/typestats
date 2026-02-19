@@ -976,12 +976,28 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
             self._add_type_alias(node.name, node.value)
 
 
+_EMPTY_SYMBOLS: Final[ModuleSymbols] = ModuleSymbols(
+    imports=(),
+    imports_wildcard=(),
+    exports_explicit=None,
+    exports_explicit_dynamic=(),
+    exports_implicit=frozenset(),
+    symbols=(),
+    type_aliases=(),
+    ignore_comments=(),
+    type_check_only=frozenset(),
+)
+
+
 def collect_symbols(
     source: str,
     /,
     *,
     package_name: str | None = None,
 ) -> ModuleSymbols:
+    if not source or source.isspace():
+        return _EMPTY_SYMBOLS
+
     module = cst.parse_module(source)
     visitor = _SymbolVisitor(package_name=package_name or "")
     module.visit(visitor)  # type: ignore[arg-type]  # CSTVisitor is accepted at runtime
