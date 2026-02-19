@@ -275,7 +275,43 @@ def _resolves_to_any(fqn: str, alias_targets: Mapping[str, str]) -> bool:
     return False
 
 
-def _unfold_any(
+def _unfold_overload(
+    overload: analyze.Overload,
+    import_map: Mapping[str, str],
+    mod: str,
+    alias_targets: Mapping[str, str],
+) -> analyze.Overload:
+    return analyze.Overload(
+        tuple(
+            analyze.Param(
+                p.name,
+                p.kind,
+                _unfold_any(
+                    p.annotation,
+                    import_map,
+                    mod,
+                    alias_targets,
+                    is_param=True,
+                ),
+            )
+            for p in overload.params
+        ),
+        _unfold_any(overload.returns, import_map, mod, alias_targets),
+    )
+
+
+def _unfold_accessor(
+    acc: analyze.Overload | None,
+    import_map: Mapping[str, str],
+    mod: str,
+    alias_targets: Mapping[str, str],
+) -> analyze.Overload | None:
+    if acc is None:
+        return None
+    return _unfold_overload(acc, import_map, mod, alias_targets)
+
+
+def _unfold_any(  # noqa: PLR0911
     type_: analyze.TypeForm,
     import_map: Mapping[str, str],
     mod: str,
@@ -307,26 +343,16 @@ def _unfold_any(
             return type_
         case analyze.Function(name=fn_name, overloads=overloads):
             new_overloads = tuple(
-                analyze.Overload(
-                    tuple(
-                        analyze.Param(
-                            p.name,
-                            p.kind,
-                            _unfold_any(
-                                p.annotation,
-                                import_map,
-                                mod,
-                                alias_targets,
-                                is_param=True,
-                            ),
-                        )
-                        for p in o.params
-                    ),
-                    _unfold_any(o.returns, import_map, mod, alias_targets),
-                )
-                for o in overloads
+                _unfold_overload(o, import_map, mod, alias_targets) for o in overloads
             )
             return analyze.Function(fn_name, (new_overloads[0], *new_overloads[1:]))
+        case analyze.Property(name=prop_name, fget=fget, fset=fset, fdel=fdel):
+            return analyze.Property(
+                prop_name,
+                fget=_unfold_accessor(fget, import_map, mod, alias_targets),
+                fset=_unfold_accessor(fset, import_map, mod, alias_targets),
+                fdel=_unfold_accessor(fdel, import_map, mod, alias_targets),
+            )
         case analyze.Class(name=cls_name, members=members):
             return analyze.Class(
                 cls_name,
@@ -435,7 +461,10 @@ async def collect_public_symbols(  # noqa: C901, PLR0912, PLR0914, PLR0915
                     alias_targets[alias_fqn] = _resolve_expr_name(value_name, imap, mod)
 
     for fqn, (path, type_) in list(all_local.items()):
-        if not isinstance(type_, analyze.Expr | analyze.Function | analyze.Class):
+        if not isinstance(
+            type_,
+            analyze.Expr | analyze.Function | analyze.Property | analyze.Class,
+        ):
             continue
         if (p2m := path_to_mod.get(path)) is None:
             continue

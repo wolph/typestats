@@ -18,6 +18,7 @@ __all__ = (
     "ANY",
     "IgnoreComment",
     "ModuleSymbols",
+    "Property",
     "Symbol",
     "TypeAlias",
     "TypeForm",
@@ -48,7 +49,7 @@ _SPECIAL_TYPEFORMS: Final[frozenset[str]] = frozenset({
     "TypeVarTuple",
 })
 
-type TypeForm = _TypeMarker | Expr | Function | Class
+type TypeForm = _TypeMarker | Expr | Function | Property | Class
 
 
 class ParamKind(StrEnum):
@@ -89,18 +90,22 @@ ANY: Final[_AnyType] = _TypeMarker.ANY
 EXTERNAL: Final[_ExternalType] = _TypeMarker.EXTERNAL
 
 type _NameResolver = Callable[[cst.CSTNode], str | None]
+type _PropertyAccessor = Literal["setter", "deleter"]
 
 
 def is_annotated(type_: TypeForm, /) -> bool:
     """Check if a type form represents a meaningfully annotated symbol.
 
-    Returns `True` for `Expr`, `ANY`, and for `Function`/`Class`
+    Returns `True` for `Expr`, `ANY`, and for `Function`/`Property`/`Class`
     types that are annotated (see below).  Returns `False` for `UNKNOWN`,
-    `KNOWN`, `EXTERNAL`, and unannotated `Function`/`Class` types.
+    `KNOWN`, `EXTERNAL`, and unannotated `Function`/`Property`/`Class` types.
     Note: *self*/*cls* parameters are excluded during parsing.
 
     For `Function` types, the function is annotated when at least one
     overload has an annotated return type or parameter.
+
+    For `Property` types, the property is annotated when at least one
+    accessor (fget, fset, or fdel) has an annotated return type or parameter.
 
     For `Class` types, the class is only considered annotated when **all**
     of its members (stored in `Class.members`) are also annotated.
@@ -110,7 +115,7 @@ def is_annotated(type_: TypeForm, /) -> bool:
     match type_:
         case Expr() | _TypeMarker.ANY:
             return True
-        case Function() | Class():
+        case Function() | Property() | Class():
             return type_.is_annotated
         case _:
             return False
@@ -212,6 +217,42 @@ class Function:
 
 
 @dataclass(frozen=True, slots=True)
+class Property:
+    name: str
+    fget: Overload | None = None
+    fset: Overload | None = None
+    fdel: Overload | None = None
+
+    @property
+    def is_annotated(self) -> bool:
+        return any(
+            accessor is not None and accessor.is_annotated
+            for accessor in (self.fget, self.fset, self.fdel)
+        )
+
+    @property
+    def annotation_counts(self) -> tuple[int, int]:
+        """`(annotated, annotatable)` counts across all accessors."""
+        counts = [
+            accessor.annotation_counts
+            for accessor in (self.fget, self.fset, self.fdel)
+            if accessor is not None
+        ]
+        return sum(a for a, _ in counts), sum(t for _, t in counts)
+
+    @override
+    def __str__(self) -> str:
+        parts: list[str] = []
+        if self.fget is not None:
+            parts.append(f"fget={self.fget}")
+        if self.fset is not None:
+            parts.append(f"fset={self.fset}")
+        if self.fdel is not None:
+            parts.append(f"fdel={self.fdel}")
+        return f"property({', '.join(parts)})"
+
+
+@dataclass(frozen=True, slots=True)
 class Class:
     name: str
     members: tuple[TypeForm, ...] = ()
@@ -234,7 +275,7 @@ class Class:
 def annotation_counts(type_: TypeForm, /) -> tuple[int, int]:
     """`(annotated, annotatable)` counts for an arbitrary type form."""
     match type_:
-        case Function() | Class():
+        case Function() | Property() | Class():
             return type_.annotation_counts
         case Expr():
             return 1, 1
@@ -401,6 +442,7 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
     _function_depth: int
     _skipped_class_depth: int
     _overload_map: defaultdict[str, list[Overload]]
+    _property_map: dict[str, int]
     _added_functions: set[str]
 
     _package_name: Final[str]
@@ -429,6 +471,7 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
         self._function_depth = 0
         self._skipped_class_depth = 0
         self._overload_map = defaultdict(list)
+        self._property_map = {}
         self._added_functions = set()
 
         self._package_name = package_name
@@ -569,6 +612,75 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
             if self._is_name_in(expr, _TYPE_CHECK_ONLY):
                 return True
         return False
+
+    def _property_accessor(
+        self,
+        node: cst.FunctionDef,
+    ) -> tuple[_PropertyAccessor, str] | None:
+        """Return the `@name.setter` or `@name.deleter` for a known property.
+
+        Returns `(accessor_kind, property_full_name)` or `None`.
+        """
+        for dec in node.decorators:
+            expr = dec.decorator
+            if not isinstance(expr, cst.Attribute):
+                continue
+            attr = expr.attr.value
+            if attr not in {"setter", "deleter"}:
+                continue
+            if not isinstance(expr.value, cst.Name):
+                continue
+            prop_base_name = expr.value.value
+            full_name = (
+                f"{self._class_stack[-1].name}.{prop_base_name}"
+                if self._class_stack
+                else prop_base_name
+            )
+            if full_name in self._property_map:
+                return attr, full_name
+        return None
+
+    def _add_property(self, node: cst.FunctionDef, name: str, sig: Overload) -> None:
+        """Create a new `Property` with *sig* as its `fget`."""
+        prop = Property(name, fget=sig)
+        self._property_map[name] = len(self.symbols)
+        if not self._class_stack:
+            self._defined_names.add(node.name.value)
+        self.symbols.append(Symbol(name, prop))
+        if self._class_stack:
+            self._class_stack[-1].members.append(prop)
+
+    def _update_property(
+        self,
+        kind: _PropertyAccessor,
+        prop_name: str,
+        sig: Overload,
+    ) -> None:
+        """Attach *sig* as the setter or deleter of an existing `Property`."""
+        idx = self._property_map[prop_name]
+        old_prop = self.symbols[idx].type_
+        assert isinstance(old_prop, Property)
+        if kind == "setter":
+            new_prop = Property(
+                old_prop.name,
+                fget=old_prop.fget,
+                fset=sig,
+                fdel=old_prop.fdel,
+            )
+        else:
+            new_prop = Property(
+                old_prop.name,
+                fget=old_prop.fget,
+                fset=old_prop.fset,
+                fdel=sig,
+            )
+        self.symbols[idx] = Symbol(old_prop.name, new_prop)
+        if self._class_stack:
+            members = self._class_stack[-1].members
+            for i, m in enumerate(members):
+                if m is old_prop:
+                    members[i] = new_prop
+                    break
 
     # --- Import handling ---
 
@@ -755,42 +867,47 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
     @override
     def visit_FunctionDef(self, node: cst.FunctionDef) -> bool:
         if self._function_depth == 0:
-            if not self._class_stack:
-                self._defined_names.add(node.name.value)
-                if self._has_type_check_only(node):
-                    self.type_check_only_names.add(node.name.value)
-            decorators = {
-                _leaf_name(full)
-                for dec in node.decorators
-                if (full := get_full_name_for_node(dec.decorator))
-            }
-            name = self._symbol_name(node.name)
-
-            skip_first = bool(self._class_stack) and "staticmethod" not in decorators
-
-            if "overload" in decorators:
-                self._overload_map[name].append(
-                    self._callable_signature(node, skip_first=skip_first),
-                )
-            elif "property" in decorators or "cached_property" in decorators:
-                self._add_symbol(
-                    node.name,
-                    Expr.from_annotation(node.returns, self._resolve_name),
-                )
-            else:
-                if overload_list := self._overload_map.pop(name, None):
-                    overloads = overload_list[0], *overload_list[1:]
-                else:
-                    overloads = (self._callable_signature(node, skip_first=skip_first),)
-
-                func = Function(name, overloads)
-                self.symbols.append(Symbol(name, func))
-                self._added_functions.add(name)
-                if self._class_stack:
-                    self._class_stack[-1].members.append(func)
+            self._handle_function_def(node)
 
         self._function_depth += 1
         return True
+
+    def _handle_function_def(self, node: cst.FunctionDef) -> None:
+        if not self._class_stack:
+            self._defined_names.add(node.name.value)
+            if self._has_type_check_only(node):
+                self.type_check_only_names.add(node.name.value)
+
+        decorators = {
+            _leaf_name(full)
+            for dec in node.decorators
+            if (full := get_full_name_for_node(dec.decorator))
+        }
+        name = self._symbol_name(node.name)
+        skip_first = bool(self._class_stack) and "staticmethod" not in decorators
+
+        if "overload" in decorators:
+            self._overload_map[name].append(
+                self._callable_signature(node, skip_first=skip_first),
+            )
+        elif "property" in decorators or "cached_property" in decorators:
+            sig = self._callable_signature(node, skip_first=skip_first)
+            self._add_property(node, name, sig)
+        elif (accessor := self._property_accessor(node)) is not None:
+            accessor_kind, prop_name = accessor
+            sig = self._callable_signature(node, skip_first=skip_first)
+            self._update_property(accessor_kind, prop_name, sig)
+        else:
+            if overload_list := self._overload_map.pop(name, None):
+                overloads = overload_list[0], *overload_list[1:]
+            else:
+                overloads = (self._callable_signature(node, skip_first=skip_first),)
+
+            func = Function(name, overloads)
+            self.symbols.append(Symbol(name, func))
+            self._added_functions.add(name)
+            if self._class_stack:
+                self._class_stack[-1].members.append(func)
 
     @override
     def leave_FunctionDef(self, original_node: cst.FunctionDef) -> None:
@@ -807,7 +924,7 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
 
     @override
     def visit_AnnAssign(self, node: cst.AnnAssign) -> None:
-        # Exports: detect ``__all__: ... = [...]``
+        # Exports: detect `__all__: ... = [...]`
         if self._is_all_target(node.target):
             self.has_explicit_all = True
         if node.value is not None:
@@ -911,7 +1028,7 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
 
     @override
     def visit_AugAssign(self, node: cst.AugAssign) -> None:
-        # Exports: detect ``__all__ += [...]`` and ``__all__ += mod.__all__``
+        # Exports: detect `__all__ += [...]` and `__all__ += mod.__all__`
         if not self._is_all_target(node.target):
             return
 
@@ -932,7 +1049,7 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
 
     @override
     def visit_Assign(self, node: cst.Assign) -> None:
-        # Exports: detect ``__all__ = [...]``
+        # Exports: detect `__all__ = [...]`
         if (
             not self.has_explicit_all
             and any(self._is_all_target(target.target) for target in node.targets)

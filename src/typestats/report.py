@@ -24,13 +24,20 @@ from typestats import analyze
 from typestats.index import PyTyped
 from typestats.typecheckers import TypeCheckerConfigDict, TypeCheckerName
 
-__all__ = "ClassReport", "FunctionReport", "ModuleReport", "NameReport", "PackageReport"
+__all__ = (
+    "ClassReport",
+    "FunctionReport",
+    "ModuleReport",
+    "NameReport",
+    "PackageReport",
+    "PropertyReport",
+)
 
 type _Symbols = Sequence[analyze.Symbol]
 type _Max1 = Literal[0, 1]
 
 type _AnySymbolReport = Annotated[
-    NameReport | FunctionReport | ClassReport,
+    NameReport | FunctionReport | PropertyReport | ClassReport,
     Discriminator("kind"),
 ]
 
@@ -76,6 +83,7 @@ class NameReport(BaseModel):
     n_method_overloads: Literal[0] = Field(0, exclude=True)
     n_classes: Literal[0] = Field(0, exclude=True)
     n_names: Literal[1] = Field(1, exclude=True)
+    n_properties: Literal[0] = Field(0, exclude=True)
 
     @classmethod
     def from_symbol(cls, name: str, ty: analyze.TypeForm, /) -> Self:
@@ -110,6 +118,7 @@ class FunctionReport(BaseModel):
     n_method_overloads: Literal[0] = Field(0, exclude=True)
     n_classes: Literal[0] = Field(0, exclude=True)
     n_names: Literal[0] = Field(0, exclude=True)
+    n_properties: Literal[0] = Field(0, exclude=True)
 
     @computed_field
     @property
@@ -135,6 +144,49 @@ class FunctionReport(BaseModel):
         )
 
 
+class PropertyReport(BaseModel):
+    """Report for a property; counts annotation slots across accessors."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["property"] = "property"
+    name: str
+    n_annotated: NonNegativeInt
+    n_any: NonNegativeInt
+    n_unannotated: NonNegativeInt
+
+    @computed_field
+    @property
+    def n_annotatable(self) -> NonNegativeInt:
+        return self.n_annotated + self.n_any + self.n_unannotated
+
+    n_functions: Literal[0] = Field(0, exclude=True)
+    n_methods: Literal[0] = Field(0, exclude=True)
+    n_function_overloads: Literal[0] = Field(0, exclude=True)
+    n_method_overloads: Literal[0] = Field(0, exclude=True)
+    n_classes: Literal[0] = Field(0, exclude=True)
+    n_names: Literal[0] = Field(0, exclude=True)
+    n_properties: Literal[1] = Field(1, exclude=True)
+
+    @classmethod
+    def from_symbol(cls, name: str, ty: analyze.Property, /) -> Self:
+        annotated = any_ = unannotated = 0
+        for accessor in (ty.fget, ty.fset, ty.fdel):
+            if accessor is not None:
+                for ann in [*(p.annotation for p in accessor.params), accessor.returns]:
+                    s = _SlotState.of(ann)
+                    annotated += s.annotated
+                    any_ += s.any
+                    unannotated += s.unannotated
+
+        return cls(
+            name=name,
+            n_annotated=annotated,
+            n_any=any_,
+            n_unannotated=unannotated,
+        )
+
+
 class ClassReport(BaseModel):
     """Report for a class; aggregates its method reports.
 
@@ -146,26 +198,35 @@ class ClassReport(BaseModel):
     kind: Literal["class"] = "class"
     name: str
     methods: tuple[FunctionReport, ...]
+    properties: tuple[PropertyReport, ...] = ()
 
     @computed_field
     @property
     def n_annotatable(self) -> NonNegativeInt:
-        return sum(m.n_annotatable for m in self.methods)
+        return sum(m.n_annotatable for m in self.methods) + sum(
+            p.n_annotatable for p in self.properties
+        )
 
     @computed_field
     @property
     def n_annotated(self) -> NonNegativeInt:
-        return sum(m.n_annotated for m in self.methods)
+        return sum(m.n_annotated for m in self.methods) + sum(
+            p.n_annotated for p in self.properties
+        )
 
     @computed_field
     @property
     def n_any(self) -> NonNegativeInt:
-        return sum(m.n_any for m in self.methods)
+        return sum(m.n_any for m in self.methods) + sum(
+            p.n_any for p in self.properties
+        )
 
     @computed_field
     @property
     def n_unannotated(self) -> NonNegativeInt:
-        return sum(m.n_unannotated for m in self.methods)
+        return sum(m.n_unannotated for m in self.methods) + sum(
+            p.n_unannotated for p in self.properties
+        )
 
     @computed_field
     @property
@@ -190,6 +251,11 @@ class ClassReport(BaseModel):
     n_classes: Literal[1] = Field(1, exclude=True)
     n_names: Literal[0] = Field(0, exclude=True)
 
+    @computed_field
+    @property
+    def n_properties(self) -> NonNegativeInt:
+        return len(self.properties)
+
     @classmethod
     def from_class(cls, name: str, class_: analyze.Class) -> Self:
         methods = [
@@ -197,7 +263,16 @@ class ClassReport(BaseModel):
             for member in class_.members
             if isinstance(member, analyze.Function)
         ]
-        return cls(name=name, methods=tuple(methods))
+        properties = [
+            PropertyReport.from_symbol(member.name, member)
+            for member in class_.members
+            if isinstance(member, analyze.Property)
+        ]
+        return cls(
+            name=name,
+            methods=tuple(methods),
+            properties=tuple(properties),
+        )
 
     @classmethod
     def from_symbol(cls, name: str, ty: analyze.Class, /) -> Self:
@@ -209,6 +284,8 @@ def _symbol_report(symbol: analyze.Symbol) -> _AnySymbolReport:
     match symbol.type_:
         case analyze.Function():
             return FunctionReport.from_symbol(symbol.name, symbol.type_)
+        case analyze.Property():
+            return PropertyReport.from_symbol(symbol.name, symbol.type_)
         case analyze.Class():
             return ClassReport.from_symbol(symbol.name, symbol.type_)
         case _:
@@ -285,6 +362,11 @@ class ModuleReport(BaseModel):
     @property
     def n_names(self) -> NonNegativeInt:
         return sum(s.n_names for s in self.symbol_reports)
+
+    @computed_field
+    @property
+    def n_properties(self) -> NonNegativeInt:
+        return sum(s.n_properties for s in self.symbol_reports)
 
     @computed_field
     @property
@@ -386,6 +468,11 @@ class PackageReport(BaseModel):
 
     @computed_field
     @property
+    def n_properties(self) -> NonNegativeInt:
+        return sum(m.n_properties for m in self.module_reports)
+
+    @computed_field
+    @property
     def type_ignores(self) -> tuple[analyze.IgnoreComment, ...]:
         return tuple(ignore for m in self.module_reports for ignore in m.type_ignores)
 
@@ -420,6 +507,7 @@ class PackageReport(BaseModel):
             f"   {self.n_modules} modules, "
             f"{self.n_functions} functions ({self.n_function_overloads} overloads), "
             f"{self.n_methods} methods ({self.n_method_overloads} overloads), "
+            f"{self.n_properties} properties, "
             f"{self.n_classes} classes, {self.n_names} names, "
             f"{self.n_type_ignores} ignore comments",
         )

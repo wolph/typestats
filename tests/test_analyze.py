@@ -14,6 +14,7 @@ from typestats.analyze import (
     Overload,
     Param,
     ParamKind,
+    Property,
     TypeForm,
     annotation_counts,
     collect_symbols,
@@ -1131,3 +1132,193 @@ class TestTypeCheckOnly:
         """)
         module = collect_symbols(src)
         assert module.type_check_only == {"_f", "_P"}
+
+
+class TestProperty:
+    def test_getter_annotated(self) -> None:
+        src = textwrap.dedent("""\
+        class C:
+            @property
+            def x(self) -> int: ...
+        """)
+        result = collect_symbols(src)
+        cls = result.symbols[0].type_
+        assert isinstance(cls, Class)
+        assert len(cls.members) == 1
+        prop = cls.members[0]
+        assert isinstance(prop, Property)
+        assert prop.name == "C.x"
+        assert prop.fget is not None
+        assert prop.fset is None
+        assert prop.fdel is None
+        assert len(prop.fget.params) == 0  # self is skipped
+        assert is_annotated(prop.fget.returns)
+        assert is_annotated(prop)
+
+    def test_getter_unannotated(self) -> None:
+        src = textwrap.dedent("""\
+        class C:
+            @property
+            def x(self): ...
+        """)
+        result = collect_symbols(src)
+        cls = result.symbols[0].type_
+        assert isinstance(cls, Class)
+        prop = cls.members[0]
+        assert isinstance(prop, Property)
+        assert prop.fget is not None
+        assert prop.fget.returns == UNKNOWN
+        assert not is_annotated(prop)
+
+    def test_getter_and_setter(self) -> None:
+        src = textwrap.dedent("""\
+        class C:
+            @property
+            def x(self) -> int: ...
+            @x.setter
+            def x(self, value: int) -> None: ...
+        """)
+        result = collect_symbols(src)
+        cls = result.symbols[0].type_
+        assert isinstance(cls, Class)
+        assert len(cls.members) == 1  # single property, not two symbols
+        prop = cls.members[0]
+        assert isinstance(prop, Property)
+        assert prop.fget is not None
+        assert prop.fset is not None
+        assert prop.fdel is None
+        assert len(prop.fset.params) == 1  # value (self skipped)
+        assert prop.fset.params[0].name == "value"
+
+    def test_getter_setter_deleter(self) -> None:
+        src = textwrap.dedent("""\
+        class C:
+            @property
+            def x(self) -> int: ...
+            @x.setter
+            def x(self, value: int) -> None: ...
+            @x.deleter
+            def x(self) -> None: ...
+        """)
+        result = collect_symbols(src)
+        cls = result.symbols[0].type_
+        assert isinstance(cls, Class)
+        assert len(cls.members) == 1
+        prop = cls.members[0]
+        assert isinstance(prop, Property)
+        assert prop.fget is not None
+        assert prop.fset is not None
+        assert prop.fdel is not None
+
+    def test_cached_property(self) -> None:
+        src = textwrap.dedent("""\
+        from functools import cached_property
+        class C:
+            @cached_property
+            def x(self) -> int: ...
+        """)
+        result = collect_symbols(src)
+        cls = result.symbols[0].type_
+        assert isinstance(cls, Class)
+        prop = cls.members[0]
+        assert isinstance(prop, Property)
+        assert prop.name == "C.x"
+        assert prop.fget is not None
+        assert prop.fset is None
+
+    def test_multiple_properties(self) -> None:
+        src = textwrap.dedent("""\
+        class C:
+            @property
+            def x(self) -> int: ...
+            @property
+            def y(self) -> str: ...
+        """)
+        result = collect_symbols(src)
+        cls = result.symbols[0].type_
+        assert isinstance(cls, Class)
+        assert len(cls.members) == 2
+        assert all(isinstance(m, Property) for m in cls.members)
+
+    def test_property_with_methods(self) -> None:
+        """Properties and methods coexist in a class."""
+        src = textwrap.dedent("""\
+        class C:
+            @property
+            def x(self) -> int: ...
+            def method(self, a: int) -> str: ...
+        """)
+        result = collect_symbols(src)
+        cls = result.symbols[0].type_
+        assert isinstance(cls, Class)
+        assert len(cls.members) == 2
+        assert isinstance(cls.members[0], Property)
+        assert isinstance(cls.members[1], Function)
+
+    def test_annotation_counts_fget_only(self) -> None:
+        """fget with annotated return: 1 annotated, 1 total."""
+        fget = Overload((), Expr(cst.parse_expression("int")))
+        prop = Property("x", fget=fget)
+        assert annotation_counts(prop) == (1, 1)
+
+    def test_annotation_counts_all_accessors(self) -> None:
+        """All three accessors fully annotated."""
+        fget = Overload((), Expr(cst.parse_expression("int")))
+        fset = Overload(
+            (
+                Param(
+                    "value",
+                    ParamKind.POSITIONAL_OR_KEYWORD,
+                    Expr(cst.parse_expression("int")),
+                ),
+            ),
+            Expr(cst.parse_expression("None")),
+        )
+        fdel = Overload((), Expr(cst.parse_expression("None")))
+        prop = Property("x", fget=fget, fset=fset, fdel=fdel)
+        # fget: 1 return. fset: 1 param + 1 return. fdel: 1 return.
+        assert annotation_counts(prop) == (4, 4)
+
+    def test_annotation_counts_unannotated(self) -> None:
+        fget = Overload((), UNKNOWN)
+        prop = Property("x", fget=fget)
+        assert annotation_counts(prop) == (0, 1)
+
+    def test_no_accessors(self) -> None:
+        prop = Property("x")
+        assert annotation_counts(prop) == (0, 0)
+        assert not is_annotated(prop)
+
+    def test_is_annotated_true(self) -> None:
+        fget = Overload((), Expr(cst.parse_expression("int")))
+        prop = Property("x", fget=fget)
+        assert is_annotated(prop)
+
+    def test_is_annotated_false(self) -> None:
+        fget = Overload((), UNKNOWN)
+        prop = Property("x", fget=fget)
+        assert not is_annotated(prop)
+
+    def test_str_fget_only(self) -> None:
+        fget = Overload((), Expr(cst.parse_expression("int")))
+        prop = Property("x", fget=fget)
+        assert str(prop) == "property(fget=() -> int)"
+
+    def test_str_all_accessors(self) -> None:
+        fget = Overload((), Expr(cst.parse_expression("int")))
+        fset = Overload(
+            (
+                Param(
+                    "value",
+                    ParamKind.POSITIONAL_OR_KEYWORD,
+                    Expr(cst.parse_expression("int")),
+                ),
+            ),
+            Expr(cst.parse_expression("None")),
+        )
+        fdel = Overload((), Expr(cst.parse_expression("None")))
+        prop = Property("x", fget=fget, fset=fset, fdel=fdel)
+        assert (
+            str(prop)
+            == "property(fget=() -> int, fset=(value: int) -> None, fdel=() -> None)"
+        )

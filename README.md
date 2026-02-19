@@ -61,7 +61,8 @@ Per-module (via `libcst`):
 - **Functions/methods**: full parameter signatures with `self`/`cls` inference
 - **Overloaded functions**: `@overload` signatures collected and merged
 - **Method aliases**: `__radd__ = __add__` inherits the full function signature
-- **Properties**: `@property` / `@cached_property` (return type used as annotation)
+- **Properties**: `@property` / `@cached_property` with `@name.setter` and `@name.deleter`
+  accessors; each accessor's full signature (parameters + return type) contributes to coverage
 - **Classes**: including nested attribute annotations
 - **`__slots__` exclusion**: `__slots__` assignments are ignored
 - **Enum members**: auto-detected as `KNOWN` (via `Enum`/`IntEnum`/`StrEnum`/`Flag`/... bases)

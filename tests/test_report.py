@@ -17,6 +17,7 @@ from typestats.analyze import (
     Overload,
     Param,
     ParamKind,
+    Property,
     Symbol,
     TypeForm,
 )
@@ -27,6 +28,7 @@ from typestats.report import (
     ModuleReport,
     NameReport,
     PackageReport,
+    PropertyReport,
     _SlotState,
     _symbol_report,
 )
@@ -180,6 +182,79 @@ class TestClassReport:
         assert r.n_methods == 2
         assert r.n_method_overloads == 3  # m1 has 2 overloads + m2 has 1
 
+    def test_with_properties(self) -> None:
+        method = Function("m", (_overload([("x", _INT)]),))
+        prop = Property("p", fget=_overload([]))
+        cls_ = Class("C", (method, prop))
+        r = ClassReport.from_symbol("C", cls_)
+        assert len(r.methods) == 1
+        assert len(r.properties) == 1
+        assert r.n_methods == 1
+        assert r.n_properties == 1
+        # method: x + return = 2; property fget: return = 1
+        assert r.n_annotatable == 3
+        assert r.n_annotated == 3
+
+    def test_properties_only(self) -> None:
+        prop = Property("p", fget=_overload([]), fset=_overload([("value", _INT)]))
+        cls_ = Class("C", (prop,))
+        r = ClassReport.from_symbol("C", cls_)
+        assert len(r.methods) == 0
+        assert len(r.properties) == 1
+        assert r.n_methods == 0
+        assert r.n_properties == 1
+        # fget: return = 1; fset: value param + return = 2
+        assert r.n_annotatable == 3
+        assert r.n_annotated == 3
+
+
+class TestPropertyReport:
+    def test_fget_only_annotated(self) -> None:
+        prop = Property("x", fget=_overload([]))
+        r = PropertyReport.from_symbol("x", prop)
+        assert r.n_annotatable == 1  # return of fget
+        assert r.n_annotated == 1
+        assert r.n_any == 0
+        assert r.n_unannotated == 0
+        assert r.n_properties == 1
+        assert r.n_functions == 0
+        assert r.n_methods == 0
+        assert r.n_classes == 0
+        assert r.n_names == 0
+
+    def test_fget_and_fset(self) -> None:
+        fget = _overload([])  # () -> int
+        fset = _overload([("value", _INT)])  # (value: int) -> int
+        prop = Property("x", fget=fget, fset=fset)
+        r = PropertyReport.from_symbol("x", prop)
+        # fget: return = 1; fset: value param = 1, return = 1
+        assert r.n_annotatable == 3
+        assert r.n_annotated == 3
+
+    def test_mixed_annotations(self) -> None:
+        fget = _overload([], returns=UNKNOWN)
+        fset = _overload([("value", _INT)])
+        prop = Property("x", fget=fget, fset=fset)
+        r = PropertyReport.from_symbol("x", prop)
+        assert r.n_annotated == 2
+        assert r.n_unannotated == 1
+
+    def test_no_accessors(self) -> None:
+        prop = Property("x")
+        r = PropertyReport.from_symbol("x", prop)
+        assert r.n_annotatable == 0
+        assert r.n_annotated == 0
+
+    def test_all_accessors(self) -> None:
+        fget = _overload([])
+        fset = _overload([("value", _INT)])
+        fdel = _overload([])
+        prop = Property("x", fget=fget, fset=fset, fdel=fdel)
+        r = PropertyReport.from_symbol("x", prop)
+        # fget: return = 1; fset: param + return = 2; fdel: return = 1
+        assert r.n_annotatable == 4
+        assert r.n_annotated == 4
+
 
 class TestSymbolReport:
     def test_function(self) -> None:
@@ -191,6 +266,11 @@ class TestSymbolReport:
         cls_ = Class("C", ())
         r = _symbol_report(Symbol("C", cls_))
         assert isinstance(r, ClassReport)
+
+    def test_property(self) -> None:
+        prop = Property("x", fget=_overload([]))
+        r = _symbol_report(Symbol("x", prop))
+        assert isinstance(r, PropertyReport)
 
     def test_name(self) -> None:
         r = _symbol_report(Symbol("x", _INT))
