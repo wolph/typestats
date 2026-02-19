@@ -3,6 +3,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Final, Literal, Self, override
+from typing import TypeAlias as _TypeAlias
 
 import libcst as cst
 import mainpy
@@ -27,8 +28,8 @@ __all__ = (
     "is_annotated",
 )
 
-_EMPTY_MODULE: Final[cst.Module] = cst.Module([])
-_ENUM_BASES: Final[frozenset[str]] = frozenset({
+_EMPTY_MODULE: Final = cst.Module([])
+_ENUM_BASES: Final = frozenset({
     "Enum",
     "IntEnum",
     "StrEnum",
@@ -36,10 +37,10 @@ _ENUM_BASES: Final[frozenset[str]] = frozenset({
     "Flag",
     "IntFlag",
 })
-_KNOWN_ATTRS_BASES: Final[frozenset[str]] = frozenset({"NamedTuple", "TypedDict"})
-_DATACLASS_DECORATORS: Final[frozenset[str]] = frozenset({"dataclass"})
-_TYPE_CHECK_ONLY: Final[frozenset[str]] = frozenset({"type_check_only"})
-_SPECIAL_TYPEFORMS: Final[frozenset[str]] = frozenset({
+_SCHEMA_BASES: Final = frozenset({"NamedTuple", "TypedDict"})
+_DATACLASS_DECORATORS: Final = frozenset({"dataclass"})
+_TYPE_CHECK_ONLY: Final = frozenset({"type_check_only"})
+_SPECIAL_TYPEFORMS: Final = frozenset({
     "namedtuple",
     "NewType",
     "ParamSpec",
@@ -48,6 +49,7 @@ _SPECIAL_TYPEFORMS: Final[frozenset[str]] = frozenset({
     "TypeVar",
     "TypeVarTuple",
 })
+_ALL: Final = "__all__"
 
 type TypeForm = _TypeMarker | Expr | Function | Property | Class
 
@@ -91,6 +93,9 @@ EXTERNAL: Final[_ExternalType] = _TypeMarker.EXTERNAL
 
 type _NameResolver = Callable[[cst.CSTNode], str | None]
 type _PropertyAccessor = Literal["setter", "deleter"]
+# used in isinstance, so we can't use `type _` syntax
+_Sequence: _TypeAlias = cst.List | cst.Tuple  # noqa: UP040
+_Container: _TypeAlias = _Sequence | cst.Set  # noqa: UP040
 
 
 def is_annotated(type_: TypeForm, /) -> bool:
@@ -186,6 +191,11 @@ class Overload:
     def __str__(self) -> str:
         params = ", ".join(str(param) for param in self.params)
         return f"({params}) -> {self.returns}"
+
+
+def _nonempty_tuple(items: list[Overload], /) -> tuple[Overload, *tuple[Overload, ...]]:
+    """Convert a non-empty list of overloads to a non-empty tuple."""
+    return items[0], *items[1:]
 
 
 @dataclass(frozen=True, slots=True)
@@ -395,11 +405,15 @@ def _unwrap_annotated(
     return current
 
 
+def _is_all_target(target: cst.BaseExpression) -> bool:
+    return get_full_name_for_node(target) == _ALL
+
+
 @dataclass(slots=True)
 class _ClassStackItem:
     name: str
     is_enum: bool
-    is_known_attrs: bool
+    is_schema: bool
     symbol_index: int  # index into _SymbolVisitor.symbols where the Class symbol lives
     members: list[TypeForm]
 
@@ -418,25 +432,23 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
     # --- Results ---
     symbols: Final[list[Symbol]]
     type_aliases: Final[list[TypeAlias]]
-    import_aliases: Final[list[tuple[str, str]]]
     type_check_only_names: Final[set[str]]
     ignore_comments: Final[list[IgnoreComment]]
 
     # --- Imports state ---
-    module_imports: Final[set[str]]
     module_aliases: Final[dict[str, str]]
-    object_mapping: Final[dict[str, set[str]]]
+    from_imports: Final[defaultdict[str, set[str]]]
     alias_mapping: Final[dict[str, list[tuple[str, str]]]]
 
     # --- Exports state ---
     has_explicit_all: bool
     all_sources: Final[list[str]]
     _exported_objects: Final[set[str]]
-    _is_assigned_export: Final[set[cst.Tuple | cst.List | cst.Set]]
-    _in_assigned_export: Final[set[cst.Tuple | cst.List | cst.Set]]
+    _is_assigned_export: Final[set[_Container]]
+    _in_assigned_export: Final[set[_Container]]
 
     # --- Symbol state ---
-    _imports: Final[dict[str, str]]
+    imports: Final[dict[str, str]]
     _defined_names: Final[set[str]]
     _class_stack: Final[deque[_ClassStackItem]]
     _function_depth: int
@@ -450,13 +462,11 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
     def __init__(self, /, *, package_name: str = "") -> None:
         self.symbols = []
         self.type_aliases = []
-        self.import_aliases = []
         self.type_check_only_names = set()
         self.ignore_comments = []
 
-        self.module_imports = set()
         self.module_aliases = {}
-        self.object_mapping = {}
+        self.from_imports = defaultdict(set)
         self.alias_mapping = {}
 
         self.has_explicit_all = False
@@ -465,7 +475,7 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
         self._is_assigned_export = set()
         self._in_assigned_export = set()
 
-        self._imports = {}
+        self.imports = {}
         self._defined_names = set()
         self._class_stack = deque()
         self._function_depth = 0
@@ -486,7 +496,7 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
             return None
 
         first, _, rest = raw.partition(".")
-        if fqn := self._imports.get(first):
+        if fqn := self.imports.get(first):
             return f"{fqn}.{rest}" if rest else fqn
         return raw
 
@@ -500,10 +510,7 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
         full_name = self._resolve_name(node)
         return full_name is not None and _leaf_name(full_name) in haystack
 
-    def _is_enum_class(self, node: cst.ClassDef) -> bool:
-        return any(self._is_name_in(base.value, _ENUM_BASES) for base in node.bases)
-
-    def _is_known_attrs_class(self, node: cst.ClassDef) -> bool:
+    def _is_schema_class(self, node: cst.ClassDef) -> bool:
         for dec in node.decorators:
             expr = dec.decorator
             if isinstance(expr, cst.Call):
@@ -512,7 +519,7 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
             if self._is_name_in(expr, _DATACLASS_DECORATORS):
                 return True
 
-        return any(self._is_name_in(b.value, _KNOWN_ATTRS_BASES) for b in node.bases)
+        return any(self._is_name_in(b.value, _SCHEMA_BASES) for b in node.bases)
 
     def _is_typealias_annotation(self, annotation: cst.Annotation) -> bool:
         full_name = self._resolve_name(annotation.annotation)
@@ -545,29 +552,45 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
 
         return None
 
-    def _add_type_alias(self, name_node: cst.Name, value: cst.BaseExpression) -> None:
-        if not self._class_stack:
-            self._defined_names.add(name_node.value)
-        self.type_aliases.append(
-            TypeAlias(
-                self._symbol_name(name_node),
-                Expr.from_expr(value, self._resolve_name),
-            ),
-        )
+    def _add_type_aliases(
+        self,
+        name_nodes: list[cst.Name],
+        value: cst.BaseExpression,
+    ) -> None:
+        if not name_nodes:
+            return
 
-    def _param(self, param: cst.Param, kind: ParamKind) -> Param:
-        return Param(
-            param.name.value,
-            kind,
-            Expr.from_annotation(param.annotation, self._resolve_name),
-        )
+        type_aliases = self.type_aliases
+        symbol_name = self._symbol_name
+        expr = Expr.from_expr(value, self._resolve_name)
 
-    def _add_symbol(self, name_node: cst.Name, annotation: TypeForm) -> None:
         if not self._class_stack:
-            self._defined_names.add(name_node.value)
-        self.symbols.append(Symbol(self._symbol_name(name_node), annotation))
-        if self._class_stack and not self._function_depth:
-            self._class_stack[-1].members.append(annotation)
+            self._defined_names.update(n.value for n in name_nodes)
+
+        for name_node in name_nodes:
+            type_aliases.append(TypeAlias(symbol_name(name_node), expr))
+
+    def _add_symbols(
+        self,
+        name_nodes: list[cst.Name],
+        annotation: TypeForm,
+    ) -> None:
+        if not name_nodes:
+            return
+        symbols = self.symbols
+        symbol_name = self._symbol_name
+        if not self._class_stack:
+            self._defined_names.update(n.value for n in name_nodes)
+            for name_node in name_nodes:
+                symbols.append(Symbol(symbol_name(name_node), annotation))
+        elif not self._function_depth:
+            members = self._class_stack[-1].members
+            for name_node in name_nodes:
+                symbols.append(Symbol(symbol_name(name_node), annotation))
+                members.append(annotation)
+        else:
+            for name_node in name_nodes:
+                symbols.append(Symbol(symbol_name(name_node), annotation))
 
     def _callable_signature(
         self,
@@ -597,7 +620,13 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
                 ):
                     skipped = True
                     continue
-                params.append(self._param(param, kind))
+                params.append(
+                    Param(
+                        param.name.value,
+                        kind,
+                        Expr.from_annotation(param.annotation, self._resolve_name),
+                    ),
+                )
 
         return Overload(
             tuple(params),
@@ -622,11 +651,10 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
         Returns `(accessor_kind, property_full_name)` or `None`.
         """
         for dec in node.decorators:
-            expr = dec.decorator
-            if not isinstance(expr, cst.Attribute):
+            if not isinstance(expr := dec.decorator, cst.Attribute):
                 continue
-            attr = expr.attr.value
-            if attr not in {"setter", "deleter"}:
+
+            if (attr := expr.attr.value) not in {"setter", "deleter"}:
                 continue
             if not isinstance(expr.value, cst.Name):
                 continue
@@ -638,6 +666,7 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
             )
             if full_name in self._property_map:
                 return attr, full_name
+
         return None
 
     def _add_property(self, node: cst.FunctionDef, name: str, sig: Overload) -> None:
@@ -660,57 +689,21 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
         idx = self._property_map[prop_name]
         old_prop = self.symbols[idx].type_
         assert isinstance(old_prop, Property)
+
         if kind == "setter":
-            new_prop = Property(
-                old_prop.name,
-                fget=old_prop.fget,
-                fset=sig,
-                fdel=old_prop.fdel,
-            )
+            fset, fdel = sig, old_prop.fdel
         else:
-            new_prop = Property(
-                old_prop.name,
-                fget=old_prop.fget,
-                fset=old_prop.fset,
-                fdel=sig,
-            )
+            fset, fdel = old_prop.fset, sig
+        new_prop = Property(old_prop.name, old_prop.fget, fset, fdel)
         self.symbols[idx] = Symbol(old_prop.name, new_prop)
+
         if self._class_stack:
-            members = self._class_stack[-1].members
-            for i, m in enumerate(members):
+            for i, m in enumerate(members := self._class_stack[-1].members):
                 if m is old_prop:
                     members[i] = new_prop
                     break
 
     # --- Import handling ---
-
-    def _handle_import(self, node: cst.Import) -> None:
-        if isinstance(node.names, cst.ImportStar):
-            return
-        for name in node.names:
-            alias = name.evaluated_alias
-            evaluated_name = name.evaluated_name
-            if alias is not None:
-                self.module_aliases[evaluated_name] = alias
-                self._imports[alias] = evaluated_name
-            else:
-                self.module_imports.add(evaluated_name)
-                self._imports[evaluated_name] = evaluated_name
-
-    def _handle_import_from(self, node: cst.ImportFrom) -> None:
-        module = get_absolute_module_from_package_for_import(
-            self._package_name,
-            node,
-        )
-        if module is None:
-            return
-
-        nodenames = node.names
-        if isinstance(nodenames, cst.ImportStar):
-            self.object_mapping[module] = set("*")
-            return
-
-        self._collect_import_from_names(module, nodenames)
 
     def _collect_import_from_names(
         self,
@@ -722,96 +715,109 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
             name = ia.evaluated_name
             if alias is not None:
                 self.alias_mapping.setdefault(module, []).append((name, alias))
-                self._imports[alias] = f"{module}.{name}"
+                self.imports[alias] = f"{module}.{name}"
             elif name != "*":
-                objects = self.object_mapping.setdefault(module, set())
+                objects = self.from_imports[module]
                 if "*" not in objects:
                     objects.add(name)
-                self._imports[name] = f"{module}.{name}"
+                self.imports[name] = f"{module}.{name}"
 
     @override
     def visit_Import(self, node: cst.Import) -> bool:
-        self._handle_import(node)
+        if not isinstance(node.names, cst.ImportStar):
+            for name in node.names:
+                evaluated_name = name.evaluated_name
+                if alias := name.evaluated_alias:
+                    self.module_aliases[evaluated_name] = alias
+                    self.imports[alias] = evaluated_name
+                else:
+                    self.imports[evaluated_name] = evaluated_name
+
         return False
 
     @override
     def visit_ImportFrom(self, node: cst.ImportFrom) -> bool:
-        self._handle_import_from(node)
+        module = get_absolute_module_from_package_for_import(self._package_name, node)
+        if module:
+            nodenames = node.names
+            if isinstance(nodenames, cst.ImportStar):
+                self.from_imports[module] = {"*"}
+            else:
+                self._collect_import_from_names(module, nodenames)
+
         return False
 
     # --- Export handling ---
-
-    @staticmethod
-    def _is_all_target(target: cst.BaseExpression) -> bool:
-        return get_full_name_for_node(target) == "__all__"
 
     def _handle_assign_target_exports(
         self,
         target: cst.BaseExpression,
         value: cst.BaseExpression,
     ) -> bool:
-        target_name = get_full_name_for_node(target)
-        if target_name == "__all__":
-            if isinstance(value, (cst.List, cst.Tuple, cst.Set)):
-                self._is_assigned_export.add(value)
-                return True
+        # Find the value assigned to __all__, whether direct or via tuple unpacking
+        all_value: cst.BaseExpression | None = None
+        if _is_all_target(target):
+            all_value = value
         elif isinstance(target, cst.Tuple) and isinstance(value, cst.Tuple):
             for idx, element_node in enumerate(target.elements):
-                if get_full_name_for_node(element_node.value) == "__all__":
-                    element_value = value.elements[idx].value
-                    if isinstance(element_value, (cst.List, cst.Tuple, cst.Set)):
-                        self._is_assigned_export.add(element_value)
-                        return True
+                if _is_all_target(element_node.value):
+                    all_value = value.elements[idx].value
+                    break
+
+        if isinstance(all_value, _Container):
+            self._is_assigned_export.add(all_value)
+            return True
+
         return False
+
+    def _visit_container(self, node: _Container) -> Literal[True]:
+        if node in self._is_assigned_export:
+            self._in_assigned_export.add(node)
+        return True
 
     @override
     def visit_List(self, node: cst.List) -> bool:
-        if node in self._is_assigned_export:
-            self._in_assigned_export.add(node)
-        return True
-
-    @override
-    def leave_List(self, original_node: cst.List) -> None:
-        self._is_assigned_export.discard(original_node)
-        self._in_assigned_export.discard(original_node)
+        return self._visit_container(node)
 
     @override
     def visit_Tuple(self, node: cst.Tuple) -> bool:
-        if node in self._is_assigned_export:
-            self._in_assigned_export.add(node)
-        return True
-
-    @override
-    def leave_Tuple(self, original_node: cst.Tuple) -> None:
-        self._is_assigned_export.discard(original_node)
-        self._in_assigned_export.discard(original_node)
+        return self._visit_container(node)
 
     @override
     def visit_Set(self, node: cst.Set) -> bool:
-        if node in self._is_assigned_export:
-            self._in_assigned_export.add(node)
-        return True
+        return self._visit_container(node)
+
+    def _leave_container(self, node: _Container) -> None:
+        self._is_assigned_export.discard(node)
+        self._in_assigned_export.discard(node)
+
+    @override
+    def leave_List(self, original_node: cst.List) -> None:
+        self._leave_container(original_node)
+
+    @override
+    def leave_Tuple(self, original_node: cst.Tuple) -> None:
+        self._leave_container(original_node)
 
     @override
     def leave_Set(self, original_node: cst.Set) -> None:
-        self._is_assigned_export.discard(original_node)
-        self._in_assigned_export.discard(original_node)
+        self._leave_container(original_node)
+
+    def _visit_string(
+        self,
+        node: cst.SimpleString | cst.ConcatenatedString,
+    ) -> Literal[False]:
+        if self._in_assigned_export and isinstance(name := node.evaluated_value, str):
+            self._exported_objects.add(name)
+        return False
 
     @override
     def visit_SimpleString(self, node: cst.SimpleString) -> bool:
-        if self._in_assigned_export:
-            name = node.evaluated_value
-            if isinstance(name, str):
-                self._exported_objects.add(name)
-        return False
+        return self._visit_string(node)
 
     @override
     def visit_ConcatenatedString(self, node: cst.ConcatenatedString) -> bool:
-        if self._in_assigned_export:
-            name = node.evaluated_value
-            if isinstance(name, str):
-                self._exported_objects.add(name)
-        return False
+        return self._visit_string(node)
 
     # --- Type-ignore comment handling ---
 
@@ -843,8 +849,8 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
         self._class_stack.append(
             _ClassStackItem(
                 name=name,
-                is_enum=self._is_enum_class(node),
-                is_known_attrs=self._is_known_attrs_class(node),
+                is_enum=any(self._is_name_in(b.value, _ENUM_BASES) for b in node.bases),
+                is_schema=self._is_schema_class(node),
                 symbol_index=symbol_index,
                 members=[],
             ),
@@ -899,7 +905,7 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
             self._update_property(accessor_kind, prop_name, sig)
         else:
             if overload_list := self._overload_map.pop(name, None):
-                overloads = overload_list[0], *overload_list[1:]
+                overloads = _nonempty_tuple(overload_list)
             else:
                 overloads = (self._callable_signature(node, skip_first=skip_first),)
 
@@ -919,13 +925,13 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
         for name, overloads in self._overload_map.items():
             if name not in added_functions:
                 self.symbols.append(
-                    Symbol(name, Function(name, (overloads[0], *overloads[1:]))),
+                    Symbol(name, Function(name, _nonempty_tuple(overloads))),
                 )
 
     @override
     def visit_AnnAssign(self, node: cst.AnnAssign) -> None:
         # Exports: detect `__all__: ... = [...]`
-        if self._is_all_target(node.target):
+        if _is_all_target(node.target):
             self.has_explicit_all = True
         if node.value is not None:
             self._handle_assign_target_exports(node.target, node.value)
@@ -941,34 +947,33 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
 
         if node.value is not None:
             if self._is_typealias_annotation(node.annotation):
-                for name_node in _extract_names(node.target):
-                    self._add_type_alias(name_node, node.value)
+                self._add_type_aliases(_extract_names(node.target), node.value)
                 return
 
             if self._is_special_typeform(node.value):
                 return
 
-        if self._class_stack and self._class_stack[-1].is_known_attrs:
+        if self._class_stack and self._class_stack[-1].is_schema:
             ty = KNOWN
         else:
             ty = Expr.from_expr(node.annotation.annotation, self._resolve_name)
 
-        for name_node in _extract_names(node.target):
-            self._add_symbol(name_node, ty)
+        self._add_symbols(_extract_names(node.target), ty)
 
     def _try_resolve_method_alias(self, node: cst.Assign) -> bool:
         if not self._class_stack or not isinstance(node.value, cst.Name):
             return False
 
-        ref = f"{self._class_stack[-1].name}.{node.value.value}"
+        current_class = self._class_stack[-1]
+        methods = current_class.members
+        symbols = self.symbols
+
+        ref = f"{current_class.name}.{node.value.value}"
 
         if overloads := self._overload_map.get(ref):
-            ref_func = Function(ref, (overloads[0], *overloads[1:]))
+            ref_func = Function(ref, _nonempty_tuple(overloads))
         else:
-            src_type = next(
-                (s.type_ for s in self.symbols if s.name == ref),
-                None,
-            )
+            src_type = next((s.type_ for s in symbols if s.name == ref), None)
             if not isinstance(src_type, Function):
                 return False
             ref_func = src_type
@@ -977,51 +982,46 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
             for name_node in _extract_names(target.target):
                 alias_name = self._symbol_name(name_node)
                 func = Function(alias_name, ref_func.overloads)
-                self.symbols.append(Symbol(alias_name, func))
-                self._class_stack[-1].members.append(func)
+                methods.append(func)
+                symbols.append(Symbol(alias_name, func))
+
         return True
 
-    def _try_add_name_alias(self, node: cst.Assign) -> bool:  # noqa: C901
-        """Handle `X = some_name` or `X = some_name[...]` as an import alias
-        or type alias.
-
-        Returns True if handled.
-        """
+    def _try_add_name_alias(self, node: cst.Assign) -> bool:
+        """Handle `X = {name}` or `X = {name}[...]` as an import alias or type alias."""
         if self._class_stack:
             return False
 
-        value = node.value
-
         # Unwrap subscript: `X = SomeType[args]` → resolve `SomeType`
+        value = node.value
         is_subscript = isinstance(value, cst.Subscript)
         base = value.value if is_subscript else value
 
-        if not isinstance(base, (cst.Name, cst.Attribute)):
+        if not isinstance(base, cst.Name | cst.Attribute):
             return False
 
-        raw = get_full_name_for_node(base)
-        if raw is None:
+        if not (raw := get_full_name_for_node(base)):
             return False
 
         first = raw.split(".", 1)[0]
 
-        if first in self._imports:
-            resolved = self._imports[first]
+        if first in self.imports:
+            resolved = self.imports[first]
             _, _, rest = raw.partition(".")
             fqn = f"{resolved}.{rest}" if rest else resolved
             for target in node.targets:
-                for name_node in _extract_names(target.target):
-                    if is_subscript:
-                        # `X = ImportedType[args]` is a type alias, not a re-export
-                        self._add_type_alias(name_node, value)
-                    else:
-                        self.import_aliases.append((name_node.value, fqn))
+                names = _extract_names(target.target)
+                if is_subscript:
+                    # `X = ImportedType[args]` is a type alias, not a re-export
+                    self._add_type_aliases(names, value)
+                else:
+                    for n in names:
+                        self.imports[n.value] = fqn
             return True
 
         if first in self._defined_names:
             for target in node.targets:
-                for name_node in _extract_names(target.target):
-                    self._add_type_alias(name_node, value)
+                self._add_type_aliases(_extract_names(target.target), value)
             return True
 
         return False
@@ -1029,71 +1029,63 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
     @override
     def visit_AugAssign(self, node: cst.AugAssign) -> None:
         # Exports: detect `__all__ += [...]` and `__all__ += mod.__all__`
-        if not self._is_all_target(node.target):
+        if not _is_all_target(node.target):
             return
 
         self.has_explicit_all = True
-        value = node.value
         if (
-            isinstance(value, cst.Attribute)
-            and value.attr.value == "__all__"
+            isinstance(value := node.value, cst.Attribute)
+            and value.attr.value == _ALL
             and (source_name := get_full_name_for_node(value.value))
         ):
             self.all_sources.append(source_name)
 
-        if isinstance(node.operator, cst.AddAssign) and isinstance(
-            value,
-            (cst.List, cst.Tuple),
-        ):
+        if isinstance(node.operator, cst.AddAssign) and isinstance(value, _Sequence):
             self._is_assigned_export.add(value)
 
     @override
     def visit_Assign(self, node: cst.Assign) -> None:
+        value = node.value
+        targets = [target.target for target in node.targets]
+
         # Exports: detect `__all__ = [...]`
-        if (
-            not self.has_explicit_all
-            and any(self._is_all_target(target.target) for target in node.targets)
-        ):  # fmt: skip
+
+        if not self.has_explicit_all and any(map(_is_all_target, targets)):
             self.has_explicit_all = True
-        for target_node in node.targets:
-            self._handle_assign_target_exports(target_node.target, node.value)
 
-        # Symbols
-        if not self._function_depth:
-            self._handle_assign_symbols(node)
+        for target in targets:
+            self._handle_assign_target_exports(target, value)
 
-    def _handle_assign_symbols(self, node: cst.Assign) -> None:
+        if self._function_depth:
+            return
+
         # __slots__ is a runtime implementation detail, not a type annotation
-        if self._class_stack and all(
-            _is_dunder_slots(target.target) for target in node.targets
-        ):
+        if (stack := self._class_stack) and all(map(_is_dunder_slots, targets)):
             return
 
-        if typealias_value := self._typealias_value_from_call(node.value):
-            for target in node.targets:
-                for name_node in _extract_names(target.target):
-                    self._add_type_alias(name_node, typealias_value)
+        if typealias_value := self._typealias_value_from_call(value):
+            for target in targets:
+                self._add_type_aliases(_extract_names(target), typealias_value)
             return
 
-        if self._is_special_typeform(node.value):
+        if self._is_special_typeform(value):
             return
 
         if self._try_add_name_alias(node) or self._try_resolve_method_alias(node):
             return
 
         # enum attributes are considered KNOWN
-        ty = KNOWN if self._class_stack and self._class_stack[-1].is_enum else UNKNOWN
-        for target in node.targets:
-            for name_node in _extract_names(target.target):
-                self._add_symbol(name_node, ty)
+        ty = KNOWN if stack and stack[-1].is_enum else UNKNOWN
+        for target in targets:
+            self._add_symbols(_extract_names(target), ty)
 
     @override
     def visit_TypeAlias(self, node: cst.TypeAlias) -> None:
         if not self._function_depth:
-            self._add_type_alias(node.name, node.value)
+            self._add_type_aliases([node.name], node.value)
 
 
-_EMPTY_SYMBOLS: Final[ModuleSymbols] = ModuleSymbols(
+_EMPTY_SYMBOLS: Final = ModuleSymbols(
     imports=(),
     imports_wildcard=(),
     exports_explicit=None,
@@ -1119,10 +1111,10 @@ def collect_symbols(
     visitor = _SymbolVisitor(package_name=package_name or "")
     module.visit(visitor)  # type: ignore[arg-type]  # CSTVisitor is accepted at runtime
 
-    imports = dict(visitor.import_aliases) | visitor._imports  # noqa: SLF001
+    imports = visitor.imports
 
     wildcard_modules = tuple(
-        mod for mod, objects in visitor.object_mapping.items() if "*" in objects
+        mod for mod, objects in visitor.from_imports.items() if "*" in objects
     )
 
     reexports = frozenset(
