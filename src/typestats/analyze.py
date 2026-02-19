@@ -96,13 +96,16 @@ type _PropertyAccessor = Literal["setter", "deleter"]
 def is_annotated(type_: TypeForm, /) -> bool:
     """Check if a type form represents a meaningfully annotated symbol.
 
-    Returns `True` for `Expr`, `ANY`, and for `Function`/`Class`
+    Returns `True` for `Expr`, `ANY`, and for `Function`/`Property`/`Class`
     types that are annotated (see below).  Returns `False` for `UNKNOWN`,
-    `KNOWN`, `EXTERNAL`, and unannotated `Function`/`Class` types.
+    `KNOWN`, `EXTERNAL`, and unannotated `Function`/`Property`/`Class` types.
     Note: *self*/*cls* parameters are excluded during parsing.
 
     For `Function` types, the function is annotated when at least one
     overload has an annotated return type or parameter.
+
+    For `Property` types, the property is annotated when at least one
+    accessor (fget, fset, or fdel) has an annotated return type or parameter.
 
     For `Class` types, the class is only considered annotated when **all**
     of its members (stored in `Class.members`) are also annotated.
