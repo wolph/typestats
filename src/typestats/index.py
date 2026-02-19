@@ -22,7 +22,9 @@ if TYPE_CHECKING:
 
 __all__ = (
     "PublicSymbols",
+    "PyTyped",
     "collect_public_symbols",
+    "get_py_typed",
     "list_sources",
     "merge_stubs_overlay",
 )
@@ -155,7 +157,16 @@ async def list_sources(project_dir: StrPath, /) -> list[anyio.Path]:
 
 
 async def get_py_typed(sources: Sequence[StrPath], /) -> PyTyped:
-    """Determine the `py.typed` status from a list of source paths."""
+    """
+    Determine the `py.typed` status from a list of source paths.
+
+    Raises:
+        ValueError: if *sources* is empty.
+    """
+    if not sources:
+        msg = "no sources provided"
+        raise ValueError(msg)
+
     root = anyio.Path(os.path.commonpath(sources))
     if await root.is_file():
         root = root.parent

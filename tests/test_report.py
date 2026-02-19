@@ -404,6 +404,7 @@ class TestPackageReportFromPath:
 
         assert "pyright" in report.typecheckers
         assert "mypy" not in report.typecheckers
+        assert report.py_typed == PyTyped.STUBS
 
     async def test_base_typecheckers_without_stubs(self, tmp_path: Path) -> None:
         """Without stubs_path, type-checker configs come from the base path."""
@@ -416,6 +417,7 @@ class TestPackageReportFromPath:
         report = await PackageReport.from_path("mypkg", base, "1.0.0")
 
         assert "mypy" in report.typecheckers
+        assert report.py_typed is PyTyped.NO
 
     async def test_stubs_project_name(self, tmp_path: Path) -> None:
         """When *project* is given, the report should use it as the package name."""
@@ -433,6 +435,7 @@ class TestPackageReportFromPath:
         )
 
         assert report.package == "mypkg-stubs"
+        assert report.py_typed is PyTyped.STUBS
 
     async def test_stubs_default_project_name(self, tmp_path: Path) -> None:
         """Without *project*, the report should use *pkg* as the package name."""
@@ -449,3 +452,4 @@ class TestPackageReportFromPath:
         )
 
         assert report.package == "mypkg"
+        assert report.py_typed is PyTyped.STUBS
