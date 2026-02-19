@@ -21,6 +21,21 @@ from typestats.analyze import (
 )
 
 
+class TestEmptySource:
+    @pytest.mark.parametrize("source", ["", " ", "\n", "  \n\t\n  "])
+    def test_empty_or_whitespace(self, source: str) -> None:
+        result = collect_symbols(source)
+        assert result.imports == ()
+        assert result.imports_wildcard == ()
+        assert result.exports_explicit is None
+        assert result.exports_explicit_dynamic == ()
+        assert result.exports_implicit == frozenset()
+        assert result.symbols == ()
+        assert result.type_aliases == ()
+        assert result.ignore_comments == ()
+        assert result.type_check_only == frozenset()
+
+
 class TestImports:
     def test_basic(self) -> None:
         src = textwrap.dedent("""
