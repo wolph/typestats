@@ -7,10 +7,13 @@ import pytest
 
 from typestats import analyze
 from typestats.index import (
+    PyTyped,
     _is_excluded_path,
     _resolve_expr_name,
     _resolves_to_any,
     collect_public_symbols,
+    get_py_typed,
+    list_sources,
     merge_stubs_overlay,
     sources_to_module_paths,
 )
@@ -57,6 +60,41 @@ _STUBS_OVERLAY: Path = _FIXTURES / "stubs_overlay"
 )
 def test_is_excluded_path(path: str, prefix: str, expected: bool) -> None:
     assert _is_excluded_path(path, prefix=prefix) == expected
+
+
+class TestGetPyTyped:
+    pytestmark = pytest.mark.anyio
+
+    async def test_stubs_package(self) -> None:
+        """A `-stubs` package should return STUBS."""
+        sources = await list_sources(_STUBS_OVERLAY)
+        assert await get_py_typed(sources) == PyTyped.STUBS
+
+    async def test_no_marker(self, tmp_path: Path) -> None:
+        """A package without py.typed should return NO."""
+        pkg = tmp_path / "mypkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("")
+        sources = await list_sources(tmp_path)
+        assert await get_py_typed(sources) == PyTyped.NO
+
+    async def test_yes(self, tmp_path: Path) -> None:
+        """A package with an empty py.typed marker should return YES."""
+        pkg = tmp_path / "mypkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("")
+        (pkg / "py.typed").write_text("")
+        sources = await list_sources(tmp_path)
+        assert await get_py_typed(sources) == PyTyped.YES
+
+    async def test_partial(self, tmp_path: Path) -> None:
+        """A package with 'partial' in py.typed should return PARTIAL."""
+        pkg = tmp_path / "mypkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("")
+        (pkg / "py.typed").write_text("partial\n")
+        sources = await list_sources(tmp_path)
+        assert await get_py_typed(sources) == PyTyped.PARTIAL
 
 
 @functools.cache

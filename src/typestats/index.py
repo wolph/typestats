@@ -4,6 +4,7 @@ import os
 import re
 import time
 from collections import defaultdict, deque
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from itertools import chain
 from typing import TYPE_CHECKING, Final
@@ -14,14 +15,16 @@ from libcst.helpers import get_full_name_for_node
 from typestats import _ruff, analyze
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping, Sequence
+    from collections.abc import Iterable, Mapping
 
     from _typeshed import StrPath
 
 
 __all__ = (
     "PublicSymbols",
+    "PyTyped",
     "collect_public_symbols",
+    "get_py_typed",
     "list_sources",
     "merge_stubs_overlay",
 )
@@ -30,16 +33,26 @@ __all__ = (
 _logger: Final = logging.getLogger(__name__)
 
 
+type _PathMap[T] = Mapping[anyio.Path, T]
+type _SymbolSequence = Sequence[analyze.Symbol]
+
+
+class PyTyped(enum.Enum):
+    NO = enum.auto()
+    YES = enum.auto()
+    PARTIAL = enum.auto()
+    STUBS = enum.auto()
+
+
 @dataclass(frozen=True, slots=True)
 class PublicSymbols:
     """Result of `collect_public_symbols`."""
 
-    symbols: Mapping[anyio.Path, Sequence[analyze.Symbol]] = field(
+    symbols: _PathMap[_SymbolSequence] = field(default_factory=dict)
+    type_ignores: _PathMap[tuple[analyze.IgnoreComment, ...]] = field(
         default_factory=dict,
     )
-    type_ignores: Mapping[anyio.Path, tuple[analyze.IgnoreComment, ...]] = field(
-        default_factory=dict,
-    )
+    py_typed: PyTyped = field(default_factory=lambda: PyTyped.NO)
 
 
 _RE_INIT: Final = re.compile(r"^__init__\.pyi?$")
@@ -143,38 +156,28 @@ async def list_sources(project_dir: StrPath, /) -> list[anyio.Path]:
     return [anyio.Path(p) for p in graph]
 
 
-def sources_root(sources: Iterable[StrPath], /) -> anyio.Path:
+async def get_py_typed(sources: Sequence[StrPath], /) -> PyTyped:
     """
-    Return the root directory containing source files in the given project directory.
-    This is determined by finding the common ancestor of all source files.
+    Determine the `py.typed` status from a list of source paths.
+
+    Raises:
+        ValueError: if *sources* is empty.
     """
-    return anyio.Path(os.path.commonpath(sources))
+    if not sources:
+        msg = "no sources provided"
+        raise ValueError(msg)
 
-
-class PyTyped(enum.Enum):
-    NO = enum.auto()
-    YES = enum.auto()
-    PARTIAL = enum.auto()
-    STUBS = enum.auto()
-
-
-async def get_py_typed(project_dir: StrPath, /) -> PyTyped:
-    """
-    Determine the `py.typed` status of the given project directory.
-    """
-    sources = await list_sources(project_dir)
-    root = sources_root(sources)
-
-    if root.parent.name.endswith("-stubs"):
-        return PyTyped.STUBS
+    root = anyio.Path(os.path.commonpath(sources))
+    if await root.is_file():
+        root = root.parent
 
     py_typed = root / "py.typed"
     if not await py_typed.exists():
-        return PyTyped.NO
+        # TODO(@jorenham): find a more robust way to detect stub-only packages
+        return PyTyped.STUBS if root.name.endswith("-stubs") else PyTyped.NO
 
     # https://typing.python.org/en/latest/spec/distributing.html#partial-stub-packages
-    contents = await py_typed.read_text()
-    if contents and "partial\n" in contents:
+    if "partial\n" in await py_typed.read_text():
         return PyTyped.PARTIAL
 
     return PyTyped.YES
@@ -561,13 +564,17 @@ async def collect_public_symbols(  # noqa: C901, PLR0912, PLR0914, PLR0915
 
     elapsed = time.perf_counter() - t0
     _logger.info("collect_public_symbols: %.2fs", elapsed)
-    return PublicSymbols(symbols=dict(result), type_ignores=type_ignores)
+    return PublicSymbols(
+        symbols=dict(result),
+        type_ignores=type_ignores,
+        py_typed=await get_py_typed(sources),
+    )
 
 
 def merge_stubs_overlay(
-    original: Mapping[anyio.Path, Sequence[analyze.Symbol]],
-    stubs: Mapping[anyio.Path, Sequence[analyze.Symbol]],
-) -> dict[anyio.Path, list[analyze.Symbol]]:
+    original: _PathMap[_SymbolSequence],
+    stubs: _PathMap[_SymbolSequence],
+) -> _PathMap[_SymbolSequence]:
     """Merge a stubs-only package overlay with original package symbols.
 
     Both *original* and *stubs* must be produced by `collect_public_symbols`
