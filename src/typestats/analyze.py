@@ -67,6 +67,8 @@ def _parse_version_tuple(node: cst.BaseExpression) -> Version | None:
                 parts.append(v)
             case _:
                 return None
+    if not parts:
+        return None
     return Version(".".join(parts))
 
 
@@ -144,7 +146,7 @@ class _VersionGuardTransformer(cst.CSTTransformer):
         """Check if *node* represents ``sys.version_info``."""
         if isinstance(node, cst.Subscript):
             if self._resolve_name(node.value) == "sys.version_info":
-                _logger.warning("subscripted sys.version_info is not supported")
+                _logger.debug("subscripted sys.version_info is not supported")
             return False
         return self._resolve_name(node) == "sys.version_info"
 
@@ -171,7 +173,7 @@ class _VersionGuardTransformer(cst.CSTTransformer):
             case cst.LessThan():
                 return _TARGET_VERSION < version  # noqa: SIM300
             case _:
-                _logger.warning(
+                _logger.debug(
                     "unsupported version_info operator: %s",
                     type(cmp.operator).__name__,
                 )
