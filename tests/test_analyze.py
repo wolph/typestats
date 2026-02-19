@@ -463,7 +463,7 @@ class TestKnownAttrs:
             "typeddict_alias",
         ],
     )
-    def test_known_attrs(self, src: str, expected_known: set[str]) -> None:
+    def test_schema(self, src: str, expected_known: set[str]) -> None:
         module = collect_symbols(textwrap.dedent(src))
         symbols = {s.name: s.type_ for s in module.symbols}
         for name in expected_known:
