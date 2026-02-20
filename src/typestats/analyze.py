@@ -51,6 +51,9 @@ _SPECIAL_TYPEFORMS: Final = frozenset({
     "TypeVarTuple",
 })
 _ALL: Final = "__all__"
+_TARGET_VERSION: Final[tuple[int, int, int]] = sys.version_info[:3]
+_SYS_VERSION_INFO: Final[str] = "sys.version_info"
+_logger: Final = logging.getLogger(__name__)
 
 type TypeForm = _TypeMarker | Expr | Function | Property | Class
 
