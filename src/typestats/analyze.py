@@ -699,7 +699,7 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
 
     @override
     def visit_Import(self, node: cst.Import) -> bool:
-        if not isinstance(node.names, cst.ImportStar):
+        if self._skip_depth == 0 and not isinstance(node.names, cst.ImportStar):
             for name in node.names:
                 evaluated_name = name.evaluated_name
                 if alias := name.evaluated_alias:
@@ -711,6 +711,9 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
 
     @override
     def visit_ImportFrom(self, node: cst.ImportFrom) -> bool:
+        if self._skip_depth > 0:
+            return False
+
         if mod := get_absolute_module_from_package_for_import(self._package_name, node):
             nodenames = node.names
             if isinstance(nodenames, cst.ImportStar):
@@ -753,7 +756,9 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
 
         return False
 
-    def _visit_container(self, node: _Container) -> Literal[True]:
+    def _visit_container(self, node: _Container) -> bool:
+        if self._skip_depth > 0:
+            return False
         if node in self._is_assigned_export:
             self._in_assigned_export.add(node)
         return True
@@ -790,6 +795,8 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
         self,
         node: cst.SimpleString | cst.ConcatenatedString,
     ) -> Literal[False]:
+        if self._skip_depth > 0:
+            return False
         if self._in_assigned_export and isinstance(name := node.evaluated_value, str):
             self._exported_objects.add(name)
         return False
@@ -1007,6 +1014,8 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
 
     @override
     def visit_AnnAssign(self, node: cst.AnnAssign) -> None:
+        if self._skip_depth > 0:
+            return
         target, value = node.target, node.value
 
         # Exports: detect `__all__: ... = [...]`
@@ -1100,6 +1109,8 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
 
     @override
     def visit_AugAssign(self, node: cst.AugAssign) -> None:
+        if self._skip_depth > 0:
+            return
         # Exports: detect `__all__ += [...]` and `__all__ += mod.__all__`
         if _is_all_target(node.target):
             self.has_explicit_all = True
@@ -1118,6 +1129,11 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
 
     @override
     def visit_Assign(self, node: cst.Assign) -> None:
+        if self._skip_depth > 0:
+            return
+        self._visit_assign(node)
+
+    def _visit_assign(self, node: cst.Assign) -> None:
         value = node.value
         targets = [target.target for target in node.targets]
 
