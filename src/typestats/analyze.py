@@ -473,6 +473,8 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
     _overload_map: defaultdict[str, list[Overload]]
     _property_map: dict[str, int]
     _added_functions: set[str]
+    _version_guard_results: dict[cst.If, bool]
+    _skip_depth: int
 
     _package_name: Final[str]
 
@@ -501,8 +503,8 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
         self._property_map = {}
         self._added_functions = set()
 
-        self._version_guard_results: dict[cst.If, bool] = {}
-        self._skip_depth: int = 0
+        self._version_guard_results = {}
+        self._skip_depth = 0
 
         self._package_name = package_name
 
@@ -528,10 +530,10 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
     def _is_version_info(self, node: cst.BaseExpression) -> bool:
         """Check if *node* represents ``sys.version_info``."""
         if isinstance(node, cst.Subscript):
-            if self._resolve_name(node.value) == "sys.version_info":
-                _logger.debug("subscripted sys.version_info is not supported")
+            if self._resolve_name(node.value) == _SYS_VERSION_INFO:
+                _logger.warning("subscripted %s is not supported", _SYS_VERSION_INFO)
             return False
-        return self._resolve_name(node) == "sys.version_info"
+        return self._resolve_name(node) == _SYS_VERSION_INFO
 
     def _eval_version_guard(self, test: cst.BaseExpression) -> bool | None:
         """Evaluate a ``sys.version_info`` comparison against the target version.
@@ -556,7 +558,7 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
             case cst.LessThan():
                 return _TARGET_VERSION < version  # noqa: SIM300
             case _:
-                _logger.debug(
+                _logger.warning(
                     "unsupported version_info operator: %s",
                     type(cmp.operator).__name__,
                 )
@@ -989,7 +991,8 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
 
     @override
     def leave_FunctionDef(self, original_node: cst.FunctionDef) -> None:
-        self._function_depth -= 1
+        if self._function_depth > 0:
+            self._function_depth -= 1
 
     @override
     def leave_Module(self, original_node: cst.Module) -> None:
