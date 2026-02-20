@@ -697,23 +697,18 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
 
     # --- Import handling ---
 
-    @override
-    def visit_Import(self, node: cst.Import) -> bool:
-        if self._skip_depth == 0 and not isinstance(node.names, cst.ImportStar):
-            for name in node.names:
-                evaluated_name = name.evaluated_name
-                if alias := name.evaluated_alias:
-                    self.module_aliases[evaluated_name] = alias
-                # pyrefly: ignore[unbound-name]
-                self.imports[alias or evaluated_name] = evaluated_name
+    def _handle_import(self, node: cst.Import) -> None:
+        if isinstance(node.names, cst.ImportStar):
+            return
 
-        return False
+        for name in node.names:
+            evaluated_name = name.evaluated_name
+            if alias := name.evaluated_alias:
+                self.module_aliases[evaluated_name] = alias
+            # pyrefly: ignore[unbound-name]
+            self.imports[alias or evaluated_name] = evaluated_name
 
-    @override
-    def visit_ImportFrom(self, node: cst.ImportFrom) -> bool:
-        if self._skip_depth > 0:
-            return False
-
+    def _handle_import_from(self, node: cst.ImportFrom) -> None:
         if mod := get_absolute_module_from_package_for_import(self._package_name, node):
             nodenames = node.names
             if isinstance(nodenames, cst.ImportStar):
@@ -731,6 +726,16 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
                     # pyrefly: ignore[unbound-name]
                     self.imports[alias or name] = f"{mod}.{name}"
 
+    @override
+    def visit_Import(self, node: cst.Import) -> bool:
+        if self._skip_depth == 0:
+            self._handle_import(node)
+        return False
+
+    @override
+    def visit_ImportFrom(self, node: cst.ImportFrom) -> bool:
+        if self._skip_depth == 0:
+            self._handle_import_from(node)
         return False
 
     # --- Export handling ---

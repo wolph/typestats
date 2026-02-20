@@ -1390,8 +1390,7 @@ class TestVersionGuards:
         symbols = {s.name for s in module.symbols}
         messages = [record.getMessage() for record in caplog.records]
         assert any(
-            "subscripted sys.version_info is not supported" in msg
-            for msg in messages
+            "subscripted sys.version_info is not supported" in msg for msg in messages
         )
         assert "x" in symbols
         assert "y" in symbols
