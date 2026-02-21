@@ -547,10 +547,10 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
         if not isinstance(test, cst.Comparison) or len(test.comparisons) != 1:
             return None
 
-        cmp = test.comparisons[0]
         if not self._is_version_info(test.left):
             return None
 
+        cmp = test.comparisons[0]
         version = _parse_version_tuple(cmp.comparator)
         if version is None:
             return None
@@ -697,9 +697,10 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
 
     # --- Import handling ---
 
-    def _handle_import(self, node: cst.Import) -> None:
-        if isinstance(node.names, cst.ImportStar):
-            return
+    @override
+    def visit_Import(self, node: cst.Import) -> bool:
+        if self._skip_depth > 0 or isinstance(node.names, cst.ImportStar):
+            return False
 
         for name in node.names:
             evaluated_name = name.evaluated_name
@@ -708,7 +709,13 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
             # pyrefly: ignore[unbound-name]
             self.imports[alias or evaluated_name] = evaluated_name
 
-    def _handle_import_from(self, node: cst.ImportFrom) -> None:
+        return False
+
+    @override
+    def visit_ImportFrom(self, node: cst.ImportFrom) -> bool:
+        if self._skip_depth > 0:
+            return False
+
         if mod := get_absolute_module_from_package_for_import(self._package_name, node):
             nodenames = node.names
             if isinstance(nodenames, cst.ImportStar):
@@ -726,16 +733,6 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
                     # pyrefly: ignore[unbound-name]
                     self.imports[alias or name] = f"{mod}.{name}"
 
-    @override
-    def visit_Import(self, node: cst.Import) -> bool:
-        if self._skip_depth == 0:
-            self._handle_import(node)
-        return False
-
-    @override
-    def visit_ImportFrom(self, node: cst.ImportFrom) -> bool:
-        if self._skip_depth == 0:
-            self._handle_import_from(node)
         return False
 
     # --- Export handling ---
