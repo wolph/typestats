@@ -476,8 +476,7 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
     _overload_map: defaultdict[str, list[Overload]]
     _property_map: dict[str, int]
     _added_functions: set[str]
-    _version_guard_results: dict[cst.If, bool]
-    _skip_depth: int
+    _version_guard_stack: deque[tuple[cst.If, bool]]
 
     _package_name: Final[str]
 
@@ -506,8 +505,7 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
         self._property_map = {}
         self._added_functions = set()
 
-        self._version_guard_results = {}
-        self._skip_depth = 0
+        self._version_guard_stack = deque()
 
         self._package_name = package_name
 
@@ -533,9 +531,24 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
     def _is_version_info(self, node: cst.BaseExpression) -> bool:
         """Check if *node* represents ``sys.version_info``."""
         if isinstance(node, cst.Subscript):
-            if self._resolve_name(node.value) == _SYS_VERSION_INFO:
+            value = node.value
+            if (isinstance(value, cst.Name) and value.value != "version_info") or (
+                isinstance(value, cst.Attribute) and value.attr.value != "version_info"
+            ):
+                return False
+            if self._resolve_name(value) == _SYS_VERSION_INFO:
                 _logger.warning("subscripted %s is not supported", _SYS_VERSION_INFO)
             return False
+
+        if isinstance(node, cst.Name):
+            if node.value != "version_info":
+                return False
+        elif isinstance(node, cst.Attribute):
+            if node.attr.value != "version_info":
+                return False
+        else:
+            return False
+
         return self._resolve_name(node) == _SYS_VERSION_INFO
 
     def _eval_version_guard(self, test: cst.BaseExpression) -> bool | None:
@@ -699,7 +712,7 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
 
     @override
     def visit_Import(self, node: cst.Import) -> bool:
-        if self._skip_depth > 0 or isinstance(node.names, cst.ImportStar):
+        if isinstance(node.names, cst.ImportStar):
             return False
 
         for name in node.names:
@@ -713,9 +726,6 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
 
     @override
     def visit_ImportFrom(self, node: cst.ImportFrom) -> bool:
-        if self._skip_depth > 0:
-            return False
-
         if mod := get_absolute_module_from_package_for_import(self._package_name, node):
             nodenames = node.names
             if isinstance(nodenames, cst.ImportStar):
@@ -759,8 +769,6 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
         return False
 
     def _visit_container(self, node: _Container) -> bool:
-        if self._skip_depth > 0:
-            return False
         if node in self._is_assigned_export:
             self._in_assigned_export.add(node)
         return True
@@ -797,8 +805,6 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
         self,
         node: cst.SimpleString | cst.ConcatenatedString,
     ) -> Literal[False]:
-        if self._skip_depth > 0:
-            return False
         if self._in_assigned_export and isinstance(name := node.evaluated_value, str):
             self._exported_objects.add(name)
         return False
@@ -815,8 +821,6 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
 
     @override
     def visit_TrailingWhitespace(self, node: cst.TrailingWhitespace) -> bool:
-        if self._skip_depth > 0:
-            return False
         if node.comment is not None:
             for match in self._TYPE_IGNORE_RE.finditer(node.comment.value):
                 rules = match.group(2)
@@ -829,35 +833,22 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
 
     @override
     def visit_If(self, node: cst.If) -> bool:
-        if self._skip_depth > 0:
-            return True  # still visit so field hooks fire
         result = self._eval_version_guard(node.test)
-        if result is not None:
-            self._version_guard_results[node] = result
-        return True
+        if result is None:
+            return True
 
-    def visit_If_body(self, node: cst.If) -> None:  # noqa: N802
-        if self._version_guard_results.get(node) is False:
-            self._skip_depth += 1  # body is dead branch
-
-    def leave_If_body(self, node: cst.If) -> None:  # noqa: N802
-        if self._version_guard_results.get(node) is False:
-            self._skip_depth -= 1
-
-    def visit_If_orelse(self, node: cst.If) -> None:  # noqa: N802
-        if self._version_guard_results.get(node) is True:
-            self._skip_depth += 1  # orelse is dead branch
-
-    def leave_If_orelse(self, node: cst.If) -> None:  # noqa: N802
-        if self._version_guard_results.get(node) is True:
-            self._skip_depth -= 1
+        self._version_guard_stack.append((node, result))
+        branch = node.body if result else node.orelse
+        if branch is not None:
+            branch.visit(self)
+        popped, _ = self._version_guard_stack.pop()
+        assert popped is node
+        return False
 
     # --- Symbol handling ---
 
     @override
     def visit_ClassDef(self, node: cst.ClassDef) -> bool:
-        if self._skip_depth > 0:
-            return False
         if self._function_depth:
             self._skipped_class_depth += 1
         else:
@@ -895,8 +886,6 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
 
     @override
     def visit_FunctionDef(self, node: cst.FunctionDef) -> bool:
-        if self._skip_depth > 0:
-            return False
         if self._function_depth == 0:
             self._handle_function_def(node)
 
@@ -1016,8 +1005,6 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
 
     @override
     def visit_AnnAssign(self, node: cst.AnnAssign) -> None:
-        if self._skip_depth > 0:
-            return
         target, value = node.target, node.value
 
         # Exports: detect `__all__: ... = [...]`
@@ -1111,8 +1098,6 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
 
     @override
     def visit_AugAssign(self, node: cst.AugAssign) -> None:
-        if self._skip_depth > 0:
-            return
         # Exports: detect `__all__ += [...]` and `__all__ += mod.__all__`
         if _is_all_target(node.target):
             self.has_explicit_all = True
@@ -1131,8 +1116,6 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
 
     @override
     def visit_Assign(self, node: cst.Assign) -> None:
-        if self._skip_depth > 0:
-            return
         self._visit_assign(node)
 
     def _visit_assign(self, node: cst.Assign) -> None:
@@ -1172,8 +1155,6 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
 
     @override
     def visit_TypeAlias(self, node: cst.TypeAlias) -> None:
-        if self._skip_depth > 0:
-            return
         if not self._function_depth:
             self._add_type_aliases([node.name], node.value)
 

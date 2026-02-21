@@ -4,6 +4,7 @@ import textwrap
 import libcst as cst
 import pytest
 
+from typestats import analyze
 from typestats.analyze import (
     ANY,
     EXTERNAL,
@@ -1333,6 +1334,33 @@ class TestVersionGuards:
         symbols = {s.name for s in module.symbols}
         assert "dead_inner" not in symbols
         assert "active" in symbols
+
+    def test_dead_version_branch_is_not_traversed(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        src = textwrap.dedent("""
+        import sys
+
+        if sys.version_info < (3, 10):
+            dead_inner: int = 1
+        else:
+            live_inner: str = "hello"
+        """)
+        annassign_visits = 0
+        original = analyze._SymbolVisitor.visit_AnnAssign  # noqa: SLF001
+
+        def visit_annassign(
+            self: analyze._SymbolVisitor,
+            node: cst.AnnAssign,
+        ) -> None:
+            nonlocal annassign_visits
+            annassign_visits += 1
+            original(self, node)
+
+        monkeypatch.setattr(analyze._SymbolVisitor, "visit_AnnAssign", visit_annassign)  # noqa: SLF001
+        collect_symbols(src)
+        assert annassign_visits == 1
 
     def test_skipped_function_branch_does_not_corrupt_depth(self) -> None:
         src = textwrap.dedent("""
