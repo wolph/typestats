@@ -476,7 +476,6 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
     _overload_map: defaultdict[str, list[Overload]]
     _property_map: dict[str, int]
     _added_functions: set[str]
-    _version_guard_stack: deque[tuple[cst.If, bool]]
 
     _package_name: Final[str]
 
@@ -504,8 +503,6 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
         self._overload_map = defaultdict(list)
         self._property_map = {}
         self._added_functions = set()
-
-        self._version_guard_stack = deque()
 
         self._package_name = package_name
 
@@ -570,9 +567,9 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
 
         match cmp.operator:
             case cst.GreaterThanEqual():
-                return _TARGET_VERSION >= version  # noqa: SIM300
+                return version <= _TARGET_VERSION
             case cst.LessThan():
-                return _TARGET_VERSION < version  # noqa: SIM300
+                return version > _TARGET_VERSION
             case _:
                 _logger.warning(
                     "unsupported version_info operator: %s",
@@ -717,10 +714,11 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
 
         for name in node.names:
             evaluated_name = name.evaluated_name
+            import_name = evaluated_name
             if alias := name.evaluated_alias:
                 self.module_aliases[evaluated_name] = alias
-            # pyrefly: ignore[unbound-name]
-            self.imports[alias or evaluated_name] = evaluated_name
+                import_name = alias
+            self.imports[import_name] = evaluated_name
 
         return False
 
@@ -735,13 +733,14 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
                     if (name := ia.evaluated_name) == "*":
                         continue
 
+                    import_name = name
                     if alias := ia.evaluated_alias:
                         self.alias_mapping[mod].append((name, alias))
+                        import_name = alias
                     elif "*" not in (objects := self.from_imports[mod]):
                         objects.add(name)
 
-                    # pyrefly: ignore[unbound-name]
-                    self.imports[alias or name] = f"{mod}.{name}"
+                    self.imports[import_name] = f"{mod}.{name}"
 
         return False
 
@@ -837,12 +836,9 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
         if result is None:
             return True
 
-        self._version_guard_stack.append((node, result))
         branch = node.body if result else node.orelse
         if branch is not None:
             branch.visit(self)
-        popped, _ = self._version_guard_stack.pop()
-        assert popped is node
         return False
 
     # --- Symbol handling ---
@@ -992,8 +988,7 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
 
     @override
     def leave_FunctionDef(self, original_node: cst.FunctionDef) -> None:
-        if self._function_depth > 0:
-            self._function_depth -= 1
+        self._function_depth -= 1
 
     @override
     def leave_Module(self, original_node: cst.Module) -> None:
@@ -1116,9 +1111,6 @@ class _SymbolVisitor(cst.CSTVisitor):  # noqa: PLR0904
 
     @override
     def visit_Assign(self, node: cst.Assign) -> None:
-        self._visit_assign(node)
-
-    def _visit_assign(self, node: cst.Assign) -> None:
         value = node.value
         targets = [target.target for target in node.targets]
 
@@ -1185,7 +1177,7 @@ def collect_symbols(
 
     # Single pass: collects symbols AND evaluates version guards.
     visitor = _SymbolVisitor(package_name=package_name or "")
-    module.visit(visitor)  # type: ignore[arg-type]  # CSTVisitor is accepted at runtime
+    module.visit(visitor)
 
     imports = visitor.imports
 
